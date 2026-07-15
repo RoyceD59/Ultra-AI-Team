@@ -1,1 +1,2 @@
 - [Orval date fields vs Drizzle string-mode dates](orval-drizzle-date-mismatch.md) — generated Zod schemas coerce `format: date` to JS `Date`; Drizzle `date` columns in `{mode:"string"}` need a manual `Date -> "YYYY-MM-DD"` conversion at the DB boundary.
+- [Orval schema naming collision with operationId](orval-schema-naming-collision.md) — if a schema in openapi.yaml shares a name with Orval's auto-derived response/body type (e.g. `AiQueryResponse` collides with the `aiQuery` operationId response type), rename the schema to break the collision before codegen.

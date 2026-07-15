@@ -371,3 +371,141 @@ export const GetDashboardActivityResponseItem = zod.object({
 export const GetDashboardActivityResponse = zod.array(GetDashboardActivityResponseItem)
 
 
+/**
+ * @summary List all conversations
+ */
+export const ListAnthropicConversationsResponseItem = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListAnthropicConversationsResponse = zod.array(ListAnthropicConversationsResponseItem)
+
+
+/**
+ * @summary Create a new conversation
+ */
+export const CreateAnthropicConversationBody = zod.object({
+  "title": zod.string()
+})
+
+export const CreateAnthropicConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get conversation with messages
+ */
+export const GetAnthropicConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetAnthropicConversationResponse = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "messages": zod.array(zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Delete a conversation
+ */
+export const DeleteAnthropicConversationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteAnthropicConversationResponse = zod.void()
+
+
+/**
+ * @summary List messages in a conversation
+ */
+export const ListAnthropicMessagesParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListAnthropicMessagesResponseItem = zod.object({
+  "id": zod.number(),
+  "conversationId": zod.number(),
+  "role": zod.string(),
+  "content": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+export const ListAnthropicMessagesResponse = zod.array(ListAnthropicMessagesResponseItem)
+
+
+/**
+ * @summary Send a message and receive an AI response (SSE stream)
+ */
+export const SendAnthropicMessageParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const SendAnthropicMessageBody = zod.object({
+  "content": zod.string()
+})
+
+export const SendAnthropicMessageResponse = zod.unknown()
+
+
+/**
+ * @summary Inbound webhook — Ultra Clear AI asks a question about projects
+ */
+
+
+
+export const AiQueryBody = zod.object({
+  "question": zod.string().min(1),
+  "source": zod.string().optional().describe('Identifier of the calling agent (e.g. \"orchestrator\", \"analytics-agent\")')
+})
+
+export const AiQueryResponse = zod.object({
+  "answer": zod.string(),
+  "generatedAt": zod.coerce.date(),
+  "source": zod.string().optional()
+})
+
+
+/**
+ * @summary Get the latest generated project report
+ */
+export const GetAiReportResponse = zod.object({
+  "summary": zod.string(),
+  "highlights": zod.array(zod.string()),
+  "risks": zod.array(zod.string()),
+  "generatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Generate a fresh AI project status report
+ */
+export const GenerateAiReportResponse = zod.object({
+  "summary": zod.string(),
+  "highlights": zod.array(zod.string()),
+  "risks": zod.array(zod.string()),
+  "generatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Manually push current project summary to Ultra Clear AI orchestrator
+ */
+export const PushToOrchestratorResponse = zod.object({
+  "success": zod.boolean(),
+  "message": zod.string(),
+  "sentAt": zod.coerce.date(),
+  "webhookUrl": zod.string().optional()
+})
+
+

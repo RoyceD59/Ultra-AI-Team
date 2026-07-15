@@ -7,6 +7,16 @@
  */
 
 export * from './activityItem';
+export * from './aiPushResult';
+export * from './aiQueryAnswer';
+export * from './aiQueryInput';
+export * from './aiReport';
+export * from './anthropicConversation';
+export * from './anthropicConversationInput';
+export * from './anthropicConversationWithMessages';
+export * from './anthropicError';
+export * from './anthropicMessage';
+export * from './anthropicMessageInput';
 export * from './dashboardSummary';
 export * from './dashboardSummaryStatusBreakdown';
 export * from './getDashboardActivityParams';

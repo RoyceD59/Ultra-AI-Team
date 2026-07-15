@@ -175,6 +175,66 @@ export interface ActivityItem {
   updatedAt: string;
 }
 
+export interface AnthropicConversation {
+  id: number;
+  title: string;
+  createdAt: string;
+}
+
+export interface AnthropicMessage {
+  id: number;
+  conversationId: number;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface AnthropicConversationInput {
+  title: string;
+}
+
+export interface AnthropicMessageInput {
+  content: string;
+}
+
+export interface AnthropicConversationWithMessages {
+  id: number;
+  title: string;
+  createdAt: string;
+  messages: AnthropicMessage[];
+}
+
+export interface AnthropicError {
+  error: string;
+}
+
+export interface AiQueryInput {
+  /** @minLength 1 */
+  question: string;
+  /** Identifier of the calling agent (e.g. "orchestrator", "analytics-agent") */
+  source?: string;
+}
+
+export interface AiQueryAnswer {
+  answer: string;
+  generatedAt: string;
+  source?: string;
+}
+
+export interface AiReport {
+  summary: string;
+  highlights: string[];
+  risks: string[];
+  generatedAt: string;
+}
+
+export interface AiPushResult {
+  success: boolean;
+  message: string;
+  sentAt: string;
+  webhookUrl?: string;
+}
+
 export type ListTasksParams = {
 projectId?: number;
 assigneeId?: number;

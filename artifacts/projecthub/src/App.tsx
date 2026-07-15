@@ -11,6 +11,7 @@ import Projects from '@/pages/projects';
 import ProjectDetail from '@/pages/project-detail';
 import Tasks from '@/pages/tasks';
 import Team from '@/pages/team';
+import AiMonitor from '@/pages/ai-monitor';
 
 const queryClient = new QueryClient();
 
@@ -23,6 +24,7 @@ function Router() {
         <Route path="/projects/:id" component={ProjectDetail} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/team" component={Team} />
+        <Route path="/ai-monitor" component={AiMonitor} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

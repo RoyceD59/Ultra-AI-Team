@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FolderKanban, CheckSquare, Users, Bell } from "lucide-react";
+import { LayoutDashboard, FolderKanban, CheckSquare, Users, Bell, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -7,6 +7,7 @@ const navigation = [
   { name: "Projects", href: "/projects", icon: FolderKanban },
   { name: "Tasks", href: "/tasks", icon: CheckSquare },
   { name: "Team", href: "/team", icon: Users },
+  { name: "AI Monitor", href: "/ai-monitor", icon: Bot },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
