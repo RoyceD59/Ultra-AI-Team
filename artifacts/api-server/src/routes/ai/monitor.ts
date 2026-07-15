@@ -118,7 +118,12 @@ router.post("/ai/push", async (_req, res): Promise<void> => {
 
     const response = await fetch(webhookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://team-horizon--jerryaroyce.replit.app",
+        "Referer": "https://team-horizon--jerryaroyce.replit.app/",
+      },
       body: JSON.stringify(payload),
     });
 
