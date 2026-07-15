@@ -1,6 +1,14 @@
-# [Project name]
+# ProjectHub
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A project management app for a small B2B SaaS team: track tasks, assign owners, set deadlines, and see progress across every project from one dashboard.
+
+## Product
+
+- **Dashboard** (`/`): cross-project totals, active/overdue/due-this-week counts, global status breakdown, recent activity feed.
+- **Projects** (`/projects`, `/projects/:id`): project cards with progress bars; detail view shows task list, status/priority breakdown, overdue count.
+- **Tasks** (`/tasks`): all tasks across projects, filterable by project/assignee/status, with inline status/assignee/due-date editing.
+- **Team** (`/team`): member directory with create/edit/delete.
+- Entities: Member, Project (status: planning/active/on_hold/completed), Task (status: todo/in_progress/in_review/done; priority: low/medium/high/urgent).
 
 ## Run & Operate
 

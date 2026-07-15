@@ -1,0 +1,1 @@
+- [Orval date fields vs Drizzle string-mode dates](orval-drizzle-date-mismatch.md) — generated Zod schemas coerce `format: date` to JS `Date`; Drizzle `date` columns in `{mode:"string"}` need a manual `Date -> "YYYY-MM-DD"` conversion at the DB boundary.
