@@ -116,13 +116,12 @@ router.post("/ai/push", async (_req, res): Promise<void> => {
       return;
     }
 
+    const secret = process.env.PROJECTHUB_WEBHOOK_SECRET;
     const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://team-horizon--jerryaroyce.replit.app",
-        "Referer": "https://team-horizon--jerryaroyce.replit.app/",
+        ...(secret ? { "Authorization": `Bearer ${secret}` } : {}),
       },
       body: JSON.stringify(payload),
     });

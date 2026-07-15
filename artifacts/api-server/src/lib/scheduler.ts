@@ -23,13 +23,12 @@ export function startScheduler() {
         return;
       }
 
+      const secret = process.env.PROJECTHUB_WEBHOOK_SECRET;
       const res = await fetch(webhookUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-          "Origin": "https://team-horizon--jerryaroyce.replit.app",
-          "Referer": "https://team-horizon--jerryaroyce.replit.app/",
+          ...(secret ? { "Authorization": `Bearer ${secret}` } : {}),
         },
         body: JSON.stringify({
           source: "projecthub",
