@@ -15,22 +15,23 @@ resolver.resolveRequest = (ctx, moduleName, platform) => {
   return ctx.resolveRequest(ctx, moduleName, platform);
 };
 
-// ── 2. Block react-native-maps native / temp directories from the watcher ───
-// pnpm creates short-lived _tmp_NNNN staging directories during install that
-// are deleted before Metro starts watching — causing ENOENT crashes.
-// We also don't need Metro to index the Android gradle build tree on Linux.
-const { mergeConfig } = require('metro-config');
-
+// ── 2. Block ephemeral pnpm staging directories from the Metro watcher ───────
+// pnpm creates short-lived _tmp_NNNN directories during postinstall scripts
+// (e.g. react-native-maps, @expo/image-utils) and removes them before Metro
+// starts walking the file tree.  Metro then throws ENOENT trying to watch
+// them.  The blockList prevents Metro from ever trying to index those paths.
+//
+// We also exclude the Android Gradle tree for react-native-maps — it is never
+// needed when running through Expo Go / web.
 const blockPatterns = [
-  // Temp staging dirs created & deleted by pnpm postinstall
-  /react-native-maps[^/]*_tmp_\d+[/\\].*/,
-  // Android Gradle tree — not needed when running in Expo Go / web
-  /react-native-maps[^/]*[/\\]android[/\\].*/,
+  // Any package's pnpm _tmp_NNNN staging dir (covers all packages)
+  /_tmp_\d+[/\\]/,
+  // react-native-maps android build tree
+  /react-native-maps[^/\\]*[/\\]android[/\\]/,
 ];
 
 const existing = config.resolver.blockList;
 if (existing) {
-  // blockList can be a RegExp, an array, or a module result
   const prev = Array.isArray(existing) ? existing : [existing];
   config.resolver.blockList = [...prev, ...blockPatterns];
 } else {

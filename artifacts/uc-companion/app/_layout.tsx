@@ -11,11 +11,16 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { Platform } from 'react-native';
 import { setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider } from '@/context/AuthContext';
 import { CartProvider } from '@/context/CartContext';
+
+// Import the notification hook — this also runs setNotificationHandler at
+// module level so it's registered before any notification can arrive.
+import * as Notifications from 'expo-notifications';
 
 // Set API base URL before any component renders
 if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -28,6 +33,27 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const router = useRouter();
+
+  // Handle notification taps: route user to the relevant screen
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const sub = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data as Record<string, string> | undefined;
+      const screen = data?.['screen'];
+      if (screen === 'products') {
+        router.push('/(tabs)/products' as never);
+      } else if (screen === 'shop') {
+        router.push('/(tabs)/products' as never);
+      } else if (screen === 'orders') {
+        router.push('/(tabs)/account' as never);
+      }
+    });
+
+    return () => sub.remove();
+  }, [router]);
+
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back', headerTintColor: '#0054A6' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

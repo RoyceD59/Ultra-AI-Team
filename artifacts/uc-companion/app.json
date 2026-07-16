@@ -42,6 +42,8 @@
         "RECORD_AUDIO",
         "READ_MEDIA_IMAGES",
         "READ_MEDIA_VIDEO",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
         "READ_CONTACTS",
         "SEND_SMS"
       ]
@@ -76,6 +78,16 @@
           "photosPermission": "Allow Ultra-Clear to access your photos and videos for maintenance tickets.",
           "cameraPermission": "Allow Ultra-Clear to take photos and record short videos for maintenance tickets.",
           "microphonePermission": "Allow Ultra-Clear to record audio with videos attached to maintenance tickets."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#0054A6",
+          "defaultChannel": "uc-default",
+          "androidMode": "default",
+          "androidCollapsedTitle": "Ultra-Clear"
         }
       ]
     ],

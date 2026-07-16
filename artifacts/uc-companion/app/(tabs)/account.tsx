@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -8,6 +8,10 @@ import { useAuth } from '@/context/AuthContext';
 import { useApi } from '@/hooks/useApi';
 import OrderCard from '@/components/OrderCard';
 import * as Haptics from 'expo-haptics';
+import {
+  getNotificationPermissionStatus,
+  requestNotificationPermission,
+} from '@/hooks/useNotifications';
 const topPad = Platform.OS === 'web' ? 67 : 0;
 
 const MENU_ITEMS = [
@@ -23,6 +27,21 @@ export default function AccountScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const api = useApi();
+  const [notifStatus, setNotifStatus] = useState<string>('undetermined');
+
+  const refreshNotifStatus = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    const s = await getNotificationPermissionStatus();
+    setNotifStatus(s);
+  }, []);
+
+  useEffect(() => { refreshNotifStatus(); }, [refreshNotifStatus]);
+
+  async function enableNotifications() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const granted = await requestNotificationPermission();
+    setNotifStatus(granted ? 'granted' : 'denied');
+  }
 
   const { data: orders } = useQuery({
     queryKey: ['orders'],
@@ -59,6 +78,31 @@ export default function AccountScreen() {
   return (
     <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={{ paddingBottom: Platform.OS === 'web' ? 34 : 80 }}>
+
+      {/* Notification permission prompt — shown until granted */}
+      {Platform.OS !== 'web' && notifStatus !== 'granted' && (
+        <View style={[styles.notifCard, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+          <View style={[styles.notifIconWrap, { backgroundColor: colors.primary }]}>
+            <Ionicons name="notifications-outline" size={22} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.notifTitle, { color: colors.text }]}>Stay informed</Text>
+            <Text style={[styles.notifSub, { color: colors.mutedForeground }]}>
+              Get order updates and filter replacement reminders
+            </Text>
+          </View>
+          {notifStatus === 'denied' ? (
+            <Text style={[styles.notifDenied, { color: colors.mutedForeground }]}>
+              Enable in Settings
+            </Text>
+          ) : (
+            <TouchableOpacity onPress={enableNotifications}
+              style={[styles.notifBtn, { backgroundColor: colors.primary }]}>
+              <Text style={styles.notifBtnTxt}>Enable</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Profile header */}
       <View style={[styles.profileHeader, { backgroundColor: colors.primary, paddingTop: topPad + 16 }]}>
@@ -141,4 +185,11 @@ const styles = StyleSheet.create({
   menuLabel: { flex: 1, fontSize: 15, fontWeight: '500' as const },
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderRadius: 12, paddingVertical: 14 },
   logoutText: { fontSize: 15, fontWeight: '600' as const },
+  notifCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 14, marginTop: topPad + 12, marginHorizontal: 16 },
+  notifIconWrap: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  notifTitle: { fontSize: 14, fontWeight: '600' as const },
+  notifSub: { fontSize: 12, marginTop: 2 },
+  notifBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+  notifBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '600' as const },
+  notifDenied: { fontSize: 11, maxWidth: 72, textAlign: 'center' },
 });

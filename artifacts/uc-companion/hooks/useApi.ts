@@ -229,5 +229,8 @@ export function useApi() {
     validateCode: (code: string, userEmail?: string) =>
       post<CodeValidationResult>('/api/uc/referrals/validate', { code, userEmail }),
     getPromotions: () => get<UCPromotion[]>('/api/uc/promotions'),
+    /** Register an Expo push token for the authenticated user. */
+    registerPushToken: (pushToken: string) =>
+      post<{ ok: boolean }>('/api/uc/notify/register', { pushToken }),
   };
 }

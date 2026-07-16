@@ -4,6 +4,7 @@ import {
   recordReferralConversion,
   registerReferralAtSignup,
 } from "./referrals";
+import { issueToken, verifyToken } from "../lib/jwt.js";
 
 const router = Router();
 
@@ -266,15 +267,15 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
     ) {
       const d = jwtData as Record<string, unknown>;
       const displayName = (d["user_display_name"] as string | undefined) ?? "";
-      res.json({
-        token: d["token"],
-        user: {
-          id: 1,
-          email: d["user_email"],
-          firstName: displayName.split(" ")[0] ?? "Customer",
-          lastName: displayName.split(" ").slice(1).join(" "),
-        },
-      });
+      // Re-issue our own signed JWT so it can be verified server-side.
+      // The original WC token (signed with the WC secret) is discarded.
+      const wcUser = {
+        id: 1,
+        email:     String(d["user_email"] ?? ""),
+        firstName: displayName.split(" ")[0] ?? "Customer",
+        lastName:  displayName.split(" ").slice(1).join(" "),
+      };
+      res.json({ token: issueToken(wcUser), user: wcUser });
       return;
     }
   } catch { /* fall through to mock */ }
@@ -282,15 +283,12 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
   if (email && password.length >= 6) {
     const name = email.split("@")[0] ?? "customer";
     const mockUser = {
-      id: Date.now(),
+      id:        Date.now(),
       email,
       firstName: name.charAt(0).toUpperCase() + name.slice(1),
-      lastName: "Customer",
+      lastName:  "Customer",
     };
-    const header = Buffer.from('{"alg":"none"}').toString("base64url");
-    const payload = Buffer.from(JSON.stringify(mockUser)).toString("base64url");
-    const token = `${header}.${payload}.`;
-    res.json({ token, user: mockUser });
+    res.json({ token: issueToken(mockUser), user: mockUser });
     return;
   }
   res.status(401).json({ error: "Invalid credentials" });
@@ -313,11 +311,8 @@ router.post("/uc/auth/register", async (req: Request, res: Response): Promise<vo
   if (referralCode?.trim()) {
     registerReferralAtSignup(email, referralCode.trim());
   }
-  // Build a decodeable (unsigned) JWT so downstream routes can read user info
-  const header = Buffer.from('{"alg":"none"}').toString("base64url");
-  const payload = Buffer.from(JSON.stringify(user)).toString("base64url");
-  const token = `${header}.${payload}.`;
-  res.json({ token, user });
+  // Issue a signed JWT (HS256 with SESSION_SECRET)
+  res.json({ token: issueToken(user), user });
 });
 
 // ─── Customer ─────────────────────────────────────────────────────────────────
@@ -434,7 +429,61 @@ router.get("/uc/orders", async (_req: Request, res: Response): Promise<void> => 
   }
 });
 
+// ─── Push notifications infrastructure ──────────────────────────────────────
+// In-memory store: userId (from JWT) → Expo push token.
+// Tokens survive as long as the process runs; a DB-backed store is tracked as
+// a follow-up task.
+const pushTokenStore = new Map<string, string>();
+
+/**
+ * Verify the Bearer JWT and return a stable user-identity string.
+ * Returns "anonymous" when the token is absent, invalid, or unsigned.
+ */
+function userIdFromBearer(authHeader: string | undefined): string {
+  const claims = verifyToken(authHeader);
+  if (!claims) return "anonymous";
+  return String(claims.id ?? claims.email ?? "anonymous");
+}
+
+/** Send a single push notification via the Expo Push API (throws on network failure). */
+async function callExpoPushApi(
+  token: string,
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {}
+): Promise<void> {
+  await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: {
+      "Content-Type":    "application/json",
+      "Accept":          "application/json",
+      "Accept-Encoding": "gzip, deflate",
+    },
+    body: JSON.stringify([{ to: token, title, body, data }]),
+  });
+}
+
+/**
+ * Look up the registered push token for a user and fire a notification.
+ * Fire-and-forget: failures are swallowed so they never block the caller.
+ */
+function sendPushToUser(
+  userId: string,
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {}
+): void {
+  const token = pushTokenStore.get(userId);
+  if (!token) return;
+  callExpoPushApi(token, title, body, data).catch(() => { /* ignore */ });
+}
+
+// ─── Orders ──────────────────────────────────────────────────────────────────
 router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => {
+  // Capture the caller's identity up-front so we can send a push notification
+  // after the order is created without re-parsing the header each time.
+  const orderUserId = userIdFromBearer(req.headers["authorization"]);
+
   const { lineItems, paymentMethod, paymentReference, shippingAddress, promoCode, userEmail } =
     req.body as {
       lineItems: { productId: number; quantity: number }[];
@@ -514,7 +563,15 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
         if (discountType === "referral" && promoCode && userEmail) {
           recordReferralConversion(promoCode, userEmail);
         }
-        res.json(normalizeOrder(order as Record<string, unknown>));
+        const normalized = normalizeOrder(order as Record<string, unknown>);
+        // Server-side push notification: order confirmed (fire-and-forget)
+        sendPushToUser(
+          orderUserId,
+          "✅ Order confirmed!",
+          `Your order #${normalized["id"] ?? "–"} is being processed.`,
+          { screen: "orders", orderId: String(normalized["id"] ?? "") }
+        );
+        res.json(normalized);
         return;
       }
     }
@@ -542,7 +599,78 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
     recordReferralConversion(promoCode, userEmail);
   }
 
+  // Server-side push notification: order confirmed (fire-and-forget)
+  sendPushToUser(
+    orderUserId,
+    "✅ Order confirmed!",
+    `Your order #${newOrder.id} is placed and being processed.`,
+    { screen: "orders", orderId: String(newOrder.id) }
+  );
+
   res.json(newOrder);
+});
+
+// ─── Push notification endpoints ─────────────────────────────────────────────
+
+/**
+ * POST /api/uc/notify/register
+ * Authenticated — stores the caller's Expo push token in the server-side map.
+ * The token is keyed by the user ID extracted from the Bearer JWT, so only
+ * the authenticated user's own token is ever registered here.
+ */
+router.post("/uc/notify/register", (req: Request, res: Response): void => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
+  if (userId === "anonymous") {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const { pushToken } = req.body as { pushToken?: string };
+  if (!pushToken) {
+    res.status(400).json({ error: "pushToken required" });
+    return;
+  }
+  pushTokenStore.set(userId, pushToken);
+  res.json({ ok: true });
+});
+
+/**
+ * POST /api/uc/notify
+ * Authenticated — sends a push notification to the authenticated user's
+ * registered device.  The server resolves the recipient token from the
+ * registered store; clients never supply a raw destination token.
+ *
+ * Body: { title: string, body?: string, data?: object }
+ */
+router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => {
+  // Require authentication — no unauthenticated push relay
+  const userId = userIdFromBearer(req.headers["authorization"]);
+  if (userId === "anonymous") {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const token = pushTokenStore.get(userId);
+  if (!token) {
+    res.status(404).json({ error: "No push token registered for this account" });
+    return;
+  }
+
+  const { title, body, data } = req.body as {
+    title?: string;
+    body?: string;
+    data?: Record<string, unknown>;
+  };
+  if (!title) {
+    res.status(400).json({ error: "title is required" });
+    return;
+  }
+
+  try {
+    await callExpoPushApi(token, title, body ?? "", data ?? {});
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Push notification failed", detail: String(err) });
+  }
 });
 
 // ─── Locations ────────────────────────────────────────────────────────────────

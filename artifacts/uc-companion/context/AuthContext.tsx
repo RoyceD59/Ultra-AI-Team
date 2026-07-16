@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getExpoPushToken } from '@/hooks/useNotifications';
 
 export interface UCUser {
   id: number;
@@ -36,16 +37,31 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 const TOKEN_KEY = 'uc_auth_token';
-const USER_KEY = 'uc_auth_user';
+const USER_KEY  = 'uc_auth_user';
 
 const getBase = () =>
   process.env.EXPO_PUBLIC_DOMAIN
     ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
     : 'http://localhost:8080';
 
+/** Fire-and-forget: get the Expo push token and register it server-side. */
+async function registerPushTokenWithServer(authToken: string): Promise<void> {
+  try {
+    const pushToken = await getExpoPushToken();
+    if (!pushToken) return;
+    await fetch(`${getBase()}/api/uc/notify/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ pushToken }),
+    });
+  } catch {
+    // Non-critical — silently ignore failures
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UCUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser]       = useState<UCUser | null>(null);
+  const [token, setToken]     = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -58,6 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (storedToken && storedUser) {
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
+          // Re-register push token on every cold start (token may have rotated)
+          registerPushTokenWithServer(storedToken);
         }
       } catch {}
       setIsLoading(false);
@@ -78,6 +96,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(u));
       setToken(data.token!);
       setUser(u);
+      // Register push token after successful login (fire-and-forget)
+      registerPushTokenWithServer(data.token!);
       return { success: true };
     } catch {
       return { success: false, error: 'Network error' };
@@ -97,6 +117,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user!));
       setToken(data.token!);
       setUser(data.user!);
+      // Register push token after successful registration (fire-and-forget)
+      registerPushTokenWithServer(data.token!);
       return { success: true };
     } catch {
       return { success: false, error: 'Network error' };

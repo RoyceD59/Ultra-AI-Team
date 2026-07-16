@@ -10,6 +10,7 @@ import { useApi, type UCPromotion } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import TrustBadges from '@/components/TrustBadges';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scheduleFilterReminder } from '@/hooks/useNotifications';
 
 const UC_SKY  = '#52b6dc';
 const UC_DEEP = '#005d8f';
@@ -73,7 +74,10 @@ export default function HomeScreen() {
     AsyncStorage.getItem('uc_filter_last_changed').then(v => {
       if (v) {
         const days = Math.floor((Date.now() - parseInt(v)) / (1000 * 60 * 60 * 24));
-        setFilterDays(180 - days);
+        const daysLeft = 180 - days;
+        setFilterDays(daysLeft);
+        // Fire a local reminder notification if within 30 days of replacement
+        scheduleFilterReminder(daysLeft);
       }
     });
   }, []);
