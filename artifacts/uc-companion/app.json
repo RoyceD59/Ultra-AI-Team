@@ -28,7 +28,8 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Ultra-Clear uses your location to show nearby experience centres and water refill ATMs.",
         "NSCameraUsageDescription": "Ultra-Clear uses your camera to attach photos to maintenance tickets.",
-        "NSPhotoLibraryUsageDescription": "Ultra-Clear accesses your photo library to attach photos to maintenance tickets."
+        "NSPhotoLibraryUsageDescription": "Ultra-Clear accesses your photo library to attach photos to maintenance tickets.",
+        "NSContactsUsageDescription": "Ultra-Clear reads your contacts so you can invite friends to join and earn referral rewards."
       }
     },
     "android": {
@@ -37,7 +38,9 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "CAMERA",
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "READ_CONTACTS",
+        "SEND_SMS"
       ]
     },
     "web": {
@@ -52,6 +55,12 @@
       ],
       "expo-font",
       "expo-web-browser",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow Ultra-Clear to access your contacts to invite friends and earn referral rewards."
+        }
+      ],
       [
         "expo-location",
         {
