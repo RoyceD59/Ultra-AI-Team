@@ -30,3 +30,6 @@ NODE_ENV = "production"
 
 [services.production.health.startup]
 path = "/api/healthz"
+
+[services.production.health.liveness]
+path = "/api/healthz"
