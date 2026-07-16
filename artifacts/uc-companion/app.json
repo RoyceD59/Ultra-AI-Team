@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "Ultra-Clear Companion",
+    "slug": "uc-companion",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "uc-companion",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0054A6"
+    },
+    "updates": {
+      "enabled": false,
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD",
+      "url": "https://u.expo.dev/REPLACE_AFTER_EAS_PROJECT_INIT"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.ultraclean.companion",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Ultra-Clear uses your location to show nearby experience centres and water refill ATMs.",
+        "NSCameraUsageDescription": "Ultra-Clear uses your camera to attach photos to maintenance tickets.",
+        "NSPhotoLibraryUsageDescription": "Ultra-Clear accesses your photo library to attach photos to maintenance tickets."
+      }
+    },
+    "android": {
+      "package": "com.ultraclean.companion",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Show current location on the map."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Ultra-Clear to access your photos for maintenance tickets.",
+          "cameraPermission": "Allow Ultra-Clear to take photos for maintenance tickets."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

@@ -1,0 +1,328 @@
+import React, { useState, useRef } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
+  Modal, Platform, ActivityIndicator, Alert,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useColors } from '@/hooks/useColors';
+import { useRouter } from 'expo-router';
+import { useCart } from '@/context/CartContext';
+import { useAuth } from '@/context/AuthContext';
+import { useApi, UCAddress } from '@/hooks/useApi';
+import PaymentMethodPicker, { PaymentMethod } from '@/components/PaymentMethodPicker';
+import * as WebBrowser from 'expo-web-browser';
+import * as Haptics from 'expo-haptics';
+
+const DELIVERY_FEE = 500;
+
+const DEFAULT_ADDRESS: UCAddress = {
+  firstName: '', lastName: '', address1: '', address2: '',
+  city: 'Nairobi', country: 'KE', phone: '',
+};
+
+type AddressField = 'firstName' | 'lastName' | 'address1' | 'city' | 'phone';
+
+interface FieldDef {
+  label: string;
+  key: AddressField;
+  placeholder: string;
+  keyboard?: 'default' | 'phone-pad';
+}
+
+const ADDRESS_FIELDS: FieldDef[] = [
+  { label: 'First name', key: 'firstName', placeholder: 'Jane' },
+  { label: 'Last name', key: 'lastName', placeholder: 'Doe' },
+  { label: 'Address', key: 'address1', placeholder: 'Street address' },
+  { label: 'City', key: 'city', placeholder: 'Nairobi' },
+  { label: 'Phone', key: 'phone', placeholder: '+254700000000', keyboard: 'phone-pad' },
+];
+
+export default function CheckoutScreen() {
+  const colors = useColors();
+  const router = useRouter();
+  const { items, totalPrice, clearCart } = useCart();
+  const { user } = useAuth();
+  const api = useApi();
+
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('mpesa');
+  const [address, setAddress] = useState<UCAddress>({
+    ...DEFAULT_ADDRESS,
+    firstName: user?.firstName ?? '',
+    lastName: user?.lastName ?? '',
+  });
+  const [mpesaPhone, setMpesaPhone] = useState('');
+  const [showMpesaModal, setShowMpesaModal] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [mpesaWaiting, setMpesaWaiting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const total = totalPrice + DELIVERY_FEE;
+
+  function validateAddress(): boolean {
+    if (!address.firstName || !address.address1 || !address.phone) {
+      Alert.alert('Missing details', 'Please fill in first name, address, and phone.');
+      return false;
+    }
+    return true;
+  }
+
+  async function handleConfirm() {
+    if (!validateAddress()) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (paymentMethod === 'mpesa') { setShowMpesaModal(true); return; }
+    if (paymentMethod === 'stripe') { await handleStripeCheckout(); return; }
+    if (paymentMethod === 'paystack') { await handlePaystack(); return; }
+    if (paymentMethod === 'cod') { await createOrder('cod', 'COD'); }
+  }
+
+  async function handleMpesa() {
+    if (!mpesaPhone || mpesaPhone.length < 9) {
+      Alert.alert('Invalid number', 'Enter a valid Safaricom number (e.g. 0712 345 678)');
+      return;
+    }
+    setProcessing(true);
+    try {
+      const r = await api.mpesaSTKPush(mpesaPhone, total, `cart_${Date.now()}`);
+      setShowMpesaModal(false);
+      setMpesaWaiting(true);
+      let attempts = 0;
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > 20) {
+          clearInterval(pollRef.current!);
+          setMpesaWaiting(false);
+          setProcessing(false);
+          Alert.alert('Timed out', 'M-Pesa confirmation timed out. Please try again.');
+          return;
+        }
+        try {
+          const status = await api.mpesaStatus(r.checkoutRequestId);
+          if (status.status === 'success') {
+            clearInterval(pollRef.current!);
+            await createOrder('mpesa', r.checkoutRequestId);
+          } else if (status.status === 'failed') {
+            clearInterval(pollRef.current!);
+            setMpesaWaiting(false);
+            setProcessing(false);
+            Alert.alert('Payment failed', status.resultDesc ?? 'M-Pesa payment was not completed.');
+          }
+        } catch { /* keep polling */ }
+      }, 3000);
+    } catch {
+      setProcessing(false);
+      Alert.alert('Error', 'Failed to send M-Pesa request.');
+    }
+  }
+
+  // Stripe Checkout — Stripe hosts the card form (PCI-safe, no card data on our server)
+  async function handleStripeCheckout() {
+    setProcessing(true);
+    try {
+      const orderId = `cart_${Date.now()}`;
+      const session = await api.stripeSession(total, orderId);
+      setProcessing(false);
+      // Open hosted Stripe checkout — Stripe handles all card data
+      await WebBrowser.openBrowserAsync(session.sessionUrl);
+      // Always verify session status after the browser closes, regardless of how the
+      // user exited (success redirect, cancel, or manual dismiss). Server verifies
+      // directly with Stripe; client cannot bypass this check.
+      setProcessing(true);
+      try {
+        await createOrder('stripe', session.sessionId);
+      } catch (e) {
+        setProcessing(false);
+        // Server returns 402 if Stripe session is not paid — surface that to the user
+        Alert.alert('Payment not confirmed', (e as Error).message ?? 'Stripe payment was not completed. No order was created.');
+      }
+    } catch (e) {
+      setProcessing(false);
+      Alert.alert('Error', (e as Error).message ?? 'Stripe checkout could not be opened.');
+    }
+  }
+
+  async function handlePaystack() {
+    setProcessing(true);
+    try {
+      const r = await api.paystackInit(user?.email ?? 'customer@ucfilters.com', total);
+      setProcessing(false);
+      // Open Paystack hosted checkout — Paystack handles all card/mobile-money data
+      await WebBrowser.openBrowserAsync(r.authorizationUrl);
+      // Always verify with the real Paystack API after the browser closes;
+      // never trust browser-close state alone as proof of payment.
+      setProcessing(true);
+      const verified = await api.paystackVerify(r.reference);
+      setProcessing(false);
+      if (verified.success && verified.status === 'success') {
+        await createOrder('paystack', r.reference);
+      } else {
+        Alert.alert(
+          'Payment not confirmed',
+          `Paystack reported status: "${verified.status ?? 'unknown'}". No order was created. Please try again.`,
+        );
+      }
+    } catch {
+      setProcessing(false);
+      Alert.alert('Error', 'Paystack payment could not be initiated or verified.');
+    }
+  }
+
+  async function createOrder(method: string, reference: string) {
+    setProcessing(true);
+    try {
+      const order = await api.createOrder({
+        lineItems: items.map(i => ({ productId: i.id, quantity: i.quantity })),
+        paymentMethod: method,
+        paymentReference: reference,
+        shippingAddress: address,
+      });
+      clearCart();
+      setMpesaWaiting(false);
+      setProcessing(false);
+      router.replace(`/order/${order.id}` as never);
+    } catch {
+      setProcessing(false);
+      setMpesaWaiting(false);
+      Alert.alert('Error', 'Order could not be created. Please contact support.');
+    }
+  }
+
+  if (mpesaWaiting) {
+    return (
+      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 20 }]}>
+        <View style={[styles.mpesaWait, { backgroundColor: '#00A65118', borderColor: '#00A651' }]}>
+          <Ionicons name="phone-portrait-outline" size={40} color="#00A651" />
+        </View>
+        <Text style={[styles.waitTitle, { color: colors.text }]}>Waiting for M-Pesa</Text>
+        <Text style={[styles.waitSub, { color: colors.mutedForeground, textAlign: 'center', paddingHorizontal: 40 }]}>
+          A prompt has been sent to {mpesaPhone}. Enter your M-Pesa PIN to complete payment.
+        </Text>
+        <ActivityIndicator color="#00A651" size="large" />
+        <TouchableOpacity onPress={() => { if (pollRef.current) clearInterval(pollRef.current); setMpesaWaiting(false); }}>
+          <Text style={[styles.cancelText, { color: colors.mutedForeground }]}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Delivery Address</Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {ADDRESS_FIELDS.map(f => (
+            <View key={f.key} style={styles.field}>
+              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>{f.label}</Text>
+              <TextInput
+                value={address[f.key]}
+                onChangeText={v => setAddress(prev => ({ ...prev, [f.key]: v }))}
+                placeholder={f.placeholder}
+                placeholderTextColor={colors.border}
+                keyboardType={f.keyboard ?? 'default'}
+                style={[styles.fieldInput, { color: colors.text, borderColor: colors.border }]}
+              />
+            </View>
+          ))}
+        </View>
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Payment Method</Text>
+        <PaymentMethodPicker selected={paymentMethod} onChange={setPaymentMethod} />
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Order Summary</Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {items.map(i => (
+            <View key={i.id} style={styles.sumRow}>
+              <Text style={[styles.sumItemName, { color: colors.text }]} numberOfLines={1}>{i.name} ×{i.quantity}</Text>
+              <Text style={[styles.sumItemPrice, { color: colors.text }]}>KES {(i.price * i.quantity).toLocaleString()}</Text>
+            </View>
+          ))}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <View style={styles.sumRow}>
+            <Text style={[styles.sumLabel, { color: colors.mutedForeground }]}>Delivery</Text>
+            <Text style={[styles.sumLabel, { color: colors.mutedForeground }]}>KES {DELIVERY_FEE.toLocaleString()}</Text>
+          </View>
+          <View style={styles.sumRow}>
+            <Text style={[styles.totalLabel, { color: colors.text }]}>Total</Text>
+            <Text style={[styles.totalValue, { color: colors.primary }]}>KES {total.toLocaleString('en-KE')}</Text>
+          </View>
+        </View>
+      </ScrollView>
+
+      <View style={[styles.footer, { backgroundColor: colors.background, borderColor: colors.border }]}>
+        <TouchableOpacity onPress={handleConfirm} disabled={processing}
+          style={[styles.confirmBtn, { backgroundColor: processing ? colors.muted : colors.primary }]}>
+          {processing ? <ActivityIndicator color="#fff" size="small" /> : (
+            <Text style={styles.confirmBtnText}>
+              {paymentMethod === 'mpesa' ? 'Send M-Pesa Request' :
+               paymentMethod === 'stripe' ? 'Pay with Stripe Checkout' :
+               paymentMethod === 'paystack' ? 'Pay with Paystack' : 'Place Order (COD)'}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* M-Pesa modal */}
+      <Modal visible={showMpesaModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>M-Pesa Payment</Text>
+            <Text style={[styles.modalSub, { color: colors.mutedForeground }]}>
+              Enter your Safaricom M-Pesa number to receive a payment prompt
+            </Text>
+            <Text style={[styles.modalAmount, { color: '#00A651' }]}>KES {total.toLocaleString('en-KE')}</Text>
+            <TextInput
+              value={mpesaPhone} onChangeText={setMpesaPhone}
+              placeholder="0712 345 678" keyboardType="phone-pad"
+              placeholderTextColor={colors.border}
+              style={[styles.modalInput, { color: colors.text, borderColor: colors.border }]}
+            />
+            <TouchableOpacity onPress={handleMpesa} disabled={processing}
+              style={[styles.modalBtn, { backgroundColor: '#00A651' }]}>
+              {processing ? <ActivityIndicator color="#fff" size="small" /> :
+                <Text style={styles.modalBtnText}>Send Payment Request</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowMpesaModal(false)} style={styles.modalCancel}>
+              <Text style={[styles.modalCancelText, { color: colors.mutedForeground }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  content: { padding: 16, gap: 14, paddingBottom: 120 },
+  sectionTitle: { fontSize: 17, fontWeight: '700' as const },
+  card: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 12 },
+  field: { gap: 4 },
+  fieldLabel: { fontSize: 12, fontWeight: '500' as const },
+  fieldInput: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  sumRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sumItemName: { fontSize: 13, flex: 1, marginRight: 8 },
+  sumItemPrice: { fontSize: 13, fontWeight: '500' as const },
+  divider: { height: 1 },
+  sumLabel: { fontSize: 14 },
+  totalLabel: { fontSize: 16, fontWeight: '700' as const },
+  totalValue: { fontSize: 18, fontWeight: '800' as const },
+  footer: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    padding: 16, paddingBottom: Platform.OS === 'web' ? 34 : 16, borderTopWidth: 1,
+  },
+  confirmBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center', justifyContent: 'center' },
+  confirmBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalCard: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, gap: 14 },
+  modalTitle: { fontSize: 20, fontWeight: '700' as const, textAlign: 'center' },
+  modalSub: { fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  modalAmount: { fontSize: 32, fontWeight: '800' as const, textAlign: 'center' },
+  modalInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16 },
+  modalBtn: { borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
+  modalBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  modalCancel: { alignItems: 'center', paddingVertical: 8 },
+  modalCancelText: { fontSize: 15 },
+  mpesaWait: { width: 80, height: 80, borderRadius: 40, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  waitTitle: { fontSize: 22, fontWeight: '700' as const },
+  waitSub: { fontSize: 14, lineHeight: 22 },
+  cancelText: { fontSize: 14, padding: 12 },
+});

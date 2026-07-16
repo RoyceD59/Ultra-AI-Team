@@ -1,0 +1,119 @@
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useColors } from '@/hooks/useColors';
+import { useRouter } from 'expo-router';
+import { useAuth } from '@/context/AuthContext';
+import * as Haptics from 'expo-haptics';
+
+export default function RegisterScreen() {
+  const colors = useColors();
+  const router = useRouter();
+  const { register } = useAuth();
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  async function handleRegister() {
+    if (!firstName || !email || !password) { Alert.alert('Required', 'Please fill in all required fields.'); return; }
+    if (password.length < 6) { Alert.alert('Weak password', 'Password must be at least 6 characters.'); return; }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLoading(true);
+    const result = await register({ firstName, lastName, email: email.trim(), password });
+    setLoading(false);
+    if (result.success) { router.replace('/(tabs)' as never); }
+    else { Alert.alert('Registration failed', result.error ?? 'Please try again.'); }
+  }
+
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
+        contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+
+        <View style={[styles.logoWrap, { backgroundColor: colors.primary }]}>
+          <Ionicons name="water" size={36} color="#fff" />
+        </View>
+        <Text style={[styles.title, { color: colors.text }]}>Create Account</Text>
+        <Text style={[styles.sub, { color: colors.mutedForeground }]}>Join Ultra-Clear today</Text>
+
+        <View style={styles.form}>
+          <View style={styles.nameRow}>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>First name *</Text>
+              <TextInput value={firstName} onChangeText={setFirstName}
+                placeholder="Jane" placeholderTextColor={colors.border}
+                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]} />
+            </View>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Last name</Text>
+              <TextInput value={lastName} onChangeText={setLastName}
+                placeholder="Doe" placeholderTextColor={colors.border}
+                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]} />
+            </View>
+          </View>
+
+          <View style={styles.field}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Email *</Text>
+            <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <Ionicons name="mail-outline" size={18} color={colors.mutedForeground} />
+              <TextInput value={email} onChangeText={setEmail}
+                placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none"
+                placeholderTextColor={colors.border}
+                style={[styles.inputInner, { color: colors.text }]} />
+            </View>
+          </View>
+
+          <View style={styles.field}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Password *</Text>
+            <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <Ionicons name="lock-closed-outline" size={18} color={colors.mutedForeground} />
+              <TextInput value={password} onChangeText={setPassword}
+                placeholder="Min. 6 characters" secureTextEntry={!showPass}
+                placeholderTextColor={colors.border}
+                style={[styles.inputInner, { color: colors.text }]} />
+              <TouchableOpacity onPress={() => setShowPass(!showPass)}>
+                <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <TouchableOpacity onPress={handleRegister} disabled={loading}
+            style={[styles.registerBtn, { backgroundColor: loading ? colors.muted : colors.primary }]}>
+            {loading ? <ActivityIndicator color="#fff" size="small" /> :
+              <Text style={styles.registerBtnText}>Create Account</Text>}
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.footer}>
+          <Text style={[styles.footerText, { color: colors.mutedForeground }]}>Already have an account?</Text>
+          <TouchableOpacity onPress={() => router.push('/auth/login')}>
+            <Text style={[styles.footerLink, { color: colors.primary }]}>Sign in</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  content: { padding: 32, alignItems: 'center', gap: 8, paddingTop: Platform.OS === 'web' ? 100 : 60 },
+  logoWrap: { width: 72, height: 72, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  title: { fontSize: 28, fontWeight: '800' as const },
+  sub: { fontSize: 15, marginBottom: 16 },
+  form: { width: '100%', gap: 14 },
+  nameRow: { flexDirection: 'row', gap: 12 },
+  field: { gap: 5 },
+  fieldLabel: { fontSize: 12, fontWeight: '500' as const },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15 },
+  inputWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  inputInner: { flex: 1, fontSize: 16 },
+  registerBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  registerBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  footer: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16 },
+  footerText: { fontSize: 14 },
+  footerLink: { fontSize: 14, fontWeight: '600' as const },
+});

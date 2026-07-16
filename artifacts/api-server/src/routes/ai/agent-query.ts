@@ -46,7 +46,7 @@ router.post("/ai/agent-query", async (req, res): Promise<void> => {
       throw new Error(`Team-Horizon returned ${response.status}: ${body}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { answer?: string; agentName?: string };
     res.json({ answer: data.answer, agentName: data.agentName ?? agentName, question });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
