@@ -12,6 +12,7 @@ const topPad = Platform.OS === 'web' ? 67 : 0;
 
 const MENU_ITEMS = [
   { label: 'My Orders', icon: 'bag-outline' as const, route: '/account' },
+  { label: 'Refer & Earn', icon: 'gift-outline' as const, route: '/referral' },
   { label: 'Maintenance Tickets', icon: 'construct-outline' as const, route: '/ticket/new' },
   { label: 'Water Test History', icon: 'flask-outline' as const, route: '/water-test' },
   { label: 'Help & Support', icon: 'help-circle-outline' as const, route: '/(tabs)/support' },

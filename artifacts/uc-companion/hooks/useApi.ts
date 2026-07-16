@@ -120,6 +120,33 @@ export interface PaymentVerifyResult {
   message: string;
 }
 
+export interface UCReferralInfo {
+  code: string;
+  referredCount: number;
+  conversions: number;
+  creditsEarnedKes: number;
+  usedReferralCode: string | null;
+  shareMessage: string;
+}
+
+export interface UCPromotion {
+  id: string;
+  title: string;
+  description: string;
+  code: string;
+  discountPercent: number;
+  expiresAt: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface CodeValidationResult {
+  valid: boolean;
+  type: 'referral' | 'promotion' | null;
+  discountPercent: number;
+  label: string;
+}
+
 export function useApi() {
   const { token } = useAuth();
 
@@ -163,6 +190,8 @@ export function useApi() {
       paymentMethod: string;
       paymentReference: string;
       shippingAddress: UCAddress;
+      promoCode?: string;
+      userEmail?: string;
     }) => post<UCOrder>('/api/uc/orders', data),
     getLocations: () => get<MapLocation[]>('/api/uc/locations'),
     getTickets: () => get<MaintenanceTicket[]>('/api/uc/tickets'),
@@ -193,5 +222,9 @@ export function useApi() {
       post<PaystackInitResponse>('/api/payments/paystack/init', { email, amount }),
     verifyPayment: (reference: string, method: string) =>
       post<PaymentVerifyResult>('/api/payments/verify', { reference, method }),
+    getMyReferral: () => get<UCReferralInfo>('/api/uc/referrals/my-code'),
+    validateCode: (code: string, userEmail?: string) =>
+      post<CodeValidationResult>('/api/uc/referrals/validate', { code, userEmail }),
+    getPromotions: () => get<UCPromotion[]>('/api/uc/promotions'),
   };
 }

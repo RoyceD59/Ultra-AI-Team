@@ -12,6 +12,7 @@ import { useApi, UCAddress } from '@/hooks/useApi';
 import PaymentMethodPicker, { PaymentMethod } from '@/components/PaymentMethodPicker';
 import * as WebBrowser from 'expo-web-browser';
 import * as Haptics from 'expo-haptics';
+import { type CodeValidationResult } from '@/hooks/useApi';
 
 const DELIVERY_FEE = 500;
 
@@ -56,7 +57,15 @@ export default function CheckoutScreen() {
   const [mpesaWaiting, setMpesaWaiting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const total = totalPrice + DELIVERY_FEE;
+  // Promo / referral code
+  const [promoInput, setPromoInput] = useState('');
+  const [showPromoField, setShowPromoField] = useState(false);
+  const [promoValidating, setPromoValidating] = useState(false);
+  const [appliedCode, setAppliedCode] = useState<CodeValidationResult | null>(null);
+
+  const grossTotal = totalPrice + DELIVERY_FEE;
+  const discountAmount = appliedCode?.valid ? Math.round((grossTotal * appliedCode.discountPercent) / 100) : 0;
+  const total = grossTotal - discountAmount;
 
   function validateAddress(): boolean {
     if (!address.firstName || !address.address1 || !address.phone) {
@@ -166,6 +175,30 @@ export default function CheckoutScreen() {
     }
   }
 
+  async function applyPromoCode() {
+    if (!promoInput.trim()) return;
+    setPromoValidating(true);
+    try {
+      const result = await api.validateCode(promoInput.trim(), user?.email);
+      if (result.valid) {
+        setAppliedCode(result);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        Alert.alert('Invalid code', result.label);
+        setAppliedCode(null);
+      }
+    } catch {
+      Alert.alert('Error', 'Could not validate code. Please try again.');
+    } finally {
+      setPromoValidating(false);
+    }
+  }
+
+  function removePromoCode() {
+    setAppliedCode(null);
+    setPromoInput('');
+  }
+
   async function createOrder(method: string, reference: string) {
     setProcessing(true);
     try {
@@ -174,6 +207,8 @@ export default function CheckoutScreen() {
         paymentMethod: method,
         paymentReference: reference,
         shippingAddress: address,
+        promoCode: appliedCode?.valid ? promoInput.trim() : undefined,
+        userEmail: user?.email,
       });
       clearCart();
       setMpesaWaiting(false);
@@ -227,6 +262,49 @@ export default function CheckoutScreen() {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Payment Method</Text>
         <PaymentMethodPicker selected={paymentMethod} onChange={setPaymentMethod} />
 
+        {/* Promo / referral code */}
+        <TouchableOpacity onPress={() => setShowPromoField(v => !v)}
+          style={[styles.promoToggle, { borderColor: colors.border }]}>
+          <Ionicons name="gift-outline" size={16} color={colors.primary} />
+          <Text style={[styles.promoToggleText, { color: colors.primary }]}>
+            {appliedCode?.valid ? `Code applied: ${promoInput.toUpperCase()}` : 'Have a referral or promo code?'}
+          </Text>
+          <Ionicons name={showPromoField ? 'chevron-up' : 'chevron-down'} size={14} color={colors.mutedForeground} />
+        </TouchableOpacity>
+
+        {showPromoField && (
+          <View style={[styles.promoBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {appliedCode?.valid ? (
+              <View style={styles.promoApplied}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.promoAppliedTitle, { color: '#005d8f' }]}>
+                    🎉 {appliedCode.discountPercent}% off applied!
+                  </Text>
+                  <Text style={[styles.promoAppliedSub, { color: colors.mutedForeground }]}>{appliedCode.label}</Text>
+                </View>
+                <TouchableOpacity onPress={removePromoCode}>
+                  <Ionicons name="close-circle" size={22} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.promoRow}>
+                <TextInput
+                  value={promoInput} onChangeText={v => setPromoInput(v.toUpperCase())}
+                  placeholder="Enter code" autoCapitalize="characters"
+                  placeholderTextColor={colors.border}
+                  style={[styles.promoInput, { color: colors.text, borderColor: colors.border }]}
+                />
+                <TouchableOpacity onPress={applyPromoCode} disabled={promoValidating}
+                  style={[styles.promoApplyBtn, { backgroundColor: '#005d8f' }]}>
+                  {promoValidating
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={styles.promoApplyText}>Apply</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Order Summary</Text>
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {items.map(i => (
@@ -240,6 +318,14 @@ export default function CheckoutScreen() {
             <Text style={[styles.sumLabel, { color: colors.mutedForeground }]}>Delivery</Text>
             <Text style={[styles.sumLabel, { color: colors.mutedForeground }]}>KES {DELIVERY_FEE.toLocaleString()}</Text>
           </View>
+          {discountAmount > 0 && (
+            <View style={styles.sumRow}>
+              <Text style={[styles.sumLabel, { color: '#005d8f' }]}>
+                Discount ({appliedCode?.discountPercent}% – {promoInput.toUpperCase()})
+              </Text>
+              <Text style={[styles.sumLabel, { color: '#005d8f' }]}>– KES {discountAmount.toLocaleString()}</Text>
+            </View>
+          )}
           <View style={styles.sumRow}>
             <Text style={[styles.totalLabel, { color: colors.text }]}>Total</Text>
             <Text style={[styles.totalValue, { color: colors.primary }]}>KES {total.toLocaleString('en-KE')}</Text>
@@ -325,4 +411,20 @@ const styles = StyleSheet.create({
   waitTitle: { fontSize: 22, fontWeight: '700' as const },
   waitSub: { fontSize: 14, lineHeight: 22 },
   cancelText: { fontSize: 14, padding: 12 },
+  promoToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+  },
+  promoToggleText: { flex: 1, fontSize: 14, fontWeight: '500' as const },
+  promoBox: { borderWidth: 1, borderRadius: 10, padding: 12 },
+  promoRow: { flexDirection: 'row', gap: 8 },
+  promoInput: {
+    flex: 1, borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15,
+  },
+  promoApplyBtn: { borderRadius: 8, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  promoApplyText: { color: '#fff', fontSize: 14, fontWeight: '700' as const },
+  promoApplied: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  promoAppliedTitle: { fontSize: 14, fontWeight: '700' as const },
+  promoAppliedSub: { fontSize: 12, marginTop: 2 },
 });

@@ -14,6 +14,7 @@ export default function RegisterScreen() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -22,7 +23,10 @@ export default function RegisterScreen() {
     if (password.length < 6) { Alert.alert('Weak password', 'Password must be at least 6 characters.'); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setLoading(true);
-    const result = await register({ firstName, lastName, email: email.trim(), password });
+    const result = await register({
+      firstName, lastName, email: email.trim(), password,
+      referralCode: referralCode.trim() || undefined,
+    });
     setLoading(false);
     if (result.success) { router.replace('/(tabs)' as never); }
     else { Alert.alert('Registration failed', result.error ?? 'Please try again.'); }
@@ -78,6 +82,26 @@ export default function RegisterScreen() {
                 <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.mutedForeground} />
               </TouchableOpacity>
             </View>
+          </View>
+
+          {/* Optional referral code */}
+          <View style={styles.field}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Referral code (optional)</Text>
+            <View style={[styles.inputWrap, { borderColor: referralCode ? '#005d8f' : colors.border, backgroundColor: colors.card }]}>
+              <Ionicons name="gift-outline" size={18} color={referralCode ? '#005d8f' : colors.mutedForeground} />
+              <TextInput value={referralCode} onChangeText={v => setReferralCode(v.toUpperCase())}
+                placeholder="e.g. JAMES-X4B2" autoCapitalize="characters"
+                placeholderTextColor={colors.border}
+                style={[styles.inputInner, { color: colors.text }]} />
+              {!!referralCode && (
+                <Ionicons name="checkmark-circle" size={18} color="#005d8f" />
+              )}
+            </View>
+            {!!referralCode && (
+              <Text style={{ fontSize: 11, color: '#005d8f', marginTop: 2 }}>
+                🎉 You'll get 10% off your first order!
+              </Text>
+            )}
           </View>
 
           <TouchableOpacity onPress={handleRegister} disabled={loading}

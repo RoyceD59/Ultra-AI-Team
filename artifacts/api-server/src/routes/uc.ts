@@ -1,4 +1,9 @@
 import { Router, type Request, type Response } from "express";
+import {
+  validateCodeForDiscount,
+  recordReferralConversion,
+  registerReferralAtSignup,
+} from "./referrals";
 
 const router = Router();
 
@@ -282,25 +287,37 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
       firstName: name.charAt(0).toUpperCase() + name.slice(1),
       lastName: "Customer",
     };
-    res.json({ token: `demo_token_${Date.now()}`, user: mockUser });
+    const header = Buffer.from('{"alg":"none"}').toString("base64url");
+    const payload = Buffer.from(JSON.stringify(mockUser)).toString("base64url");
+    const token = `${header}.${payload}.`;
+    res.json({ token, user: mockUser });
     return;
   }
   res.status(401).json({ error: "Invalid credentials" });
 });
 
 router.post("/uc/auth/register", async (req: Request, res: Response): Promise<void> => {
-  const { email, password, firstName, lastName } = req.body as {
+  const { email, password, firstName, lastName, referralCode } = req.body as {
     email?: string;
     password?: string;
     firstName?: string;
     lastName?: string;
+    referralCode?: string;
   };
   if (!email || !password || !firstName) {
     res.status(400).json({ error: "Required fields missing" });
     return;
   }
   const user = { id: Date.now(), email, firstName, lastName: lastName ?? "" };
-  res.json({ token: `demo_token_${Date.now()}`, user });
+  // Store referral association so first-order discount can be applied later
+  if (referralCode?.trim()) {
+    registerReferralAtSignup(email, referralCode.trim());
+  }
+  // Build a decodeable (unsigned) JWT so downstream routes can read user info
+  const header = Buffer.from('{"alg":"none"}').toString("base64url");
+  const payload = Buffer.from(JSON.stringify(user)).toString("base64url");
+  const token = `${header}.${payload}.`;
+  res.json({ token, user });
 });
 
 // ─── Customer ─────────────────────────────────────────────────────────────────
@@ -418,26 +435,56 @@ router.get("/uc/orders", async (_req: Request, res: Response): Promise<void> => 
 });
 
 router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => {
-  const { lineItems, paymentMethod, paymentReference, shippingAddress } = req.body as {
-    lineItems: { productId: number; quantity: number }[];
-    paymentMethod: string;
-    paymentReference?: string;
-    shippingAddress?: Record<string, string>;
-  };
+  const { lineItems, paymentMethod, paymentReference, shippingAddress, promoCode, userEmail } =
+    req.body as {
+      lineItems: { productId: number; quantity: number }[];
+      paymentMethod: string;
+      paymentReference?: string;
+      shippingAddress?: Record<string, string>;
+      promoCode?: string;            // referral or promotion code
+      userEmail?: string;            // used to gate referral first-order discount
+    };
   if (!lineItems || !paymentMethod) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }
 
   // Server-side payment verification — gate order creation on confirmed payment.
-  // Only COD is allowed without a reference; all other methods must produce a verified reference.
   const verification = await verifyPaymentOnServer(paymentMethod, paymentReference ?? "");
   if (!verification.ok) {
     res.status(402).json({ error: "Payment not verified", reason: verification.reason });
     return;
   }
 
+  // Resolve discount from promo/referral code (server re-validates; client cannot fake this)
+  let discountPercent = 0;
+  let discountType: "referral" | "promotion" | null = null;
+  if (promoCode?.trim()) {
+    const validation = validateCodeForDiscount(promoCode.trim(), userEmail ?? "");
+    if (validation.valid) {
+      discountPercent = validation.discountPercent;
+      discountType = validation.type;
+    }
+  }
+
   const isPaid = paymentMethod !== "cod";
+
+  // Compute order total after discount (500 KES delivery already included by client)
+  const productLines = lineItems.map((i) => {
+    const p = MOCK_PRODUCTS.find((m) => m["id"] === i.productId);
+    const price = parseFloat((p?.["price"] as string | undefined) ?? "0");
+    return {
+      productId: i.productId,
+      name: (p?.["name"] as string | undefined) ?? "Product",
+      quantity: i.quantity,
+      subtotal: price * i.quantity,
+    };
+  });
+  const subtotal = productLines.reduce((s, i) => s + i.subtotal, 0);
+  const delivery = 500;
+  const gross = subtotal + delivery;
+  const discountAmount = Math.round((gross * discountPercent) / 100);
+  const netTotal = gross - discountAmount;
 
   try {
     if (hasWCCredentials()) {
@@ -450,7 +497,12 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
         set_paid: isPaid,
         shipping: shippingAddress,
         line_items: lineItems.map((i) => ({ product_id: i.productId, quantity: i.quantity })),
-        meta_data: [{ key: "payment_reference", value: paymentReference ?? "" }],
+        meta_data: [
+          { key: "payment_reference", value: paymentReference ?? "" },
+          { key: "promo_code", value: promoCode ?? "" },
+          { key: "discount_percent", value: String(discountPercent) },
+        ],
+        coupon_lines: discountPercent > 0 && promoCode ? [{ code: promoCode }] : [],
       };
       const orderRes = await fetch(wcUrl("/orders"), {
         method: "POST",
@@ -459,34 +511,37 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       });
       const order: unknown = await orderRes.json();
       if (order && typeof order === "object" && "id" in order) {
+        if (discountType === "referral" && promoCode && userEmail) {
+          recordReferralConversion(promoCode, userEmail);
+        }
         res.json(normalizeOrder(order as Record<string, unknown>));
         return;
       }
     }
   } catch { /* fall through to mock */ }
 
-  const products = lineItems.map((i) => {
-    const p = MOCK_PRODUCTS.find((m) => m["id"] === i.productId);
-    const price = parseFloat((p?.["price"] as string | undefined) ?? "0");
-    return {
-      productId: i.productId,
-      name: (p?.["name"] as string | undefined) ?? "Product",
-      quantity: i.quantity,
-      total: String(price * i.quantity),
-    };
-  });
-  const total = products.reduce((s, i) => s + parseFloat(i.total), 0);
   const newOrder = {
     id: Date.now(),
     status: paymentMethod === "cod" ? "pending" : "processing",
     dateCreated: new Date().toISOString(),
-    total: String(total),
+    total: String(netTotal),
     currency: "KES",
-    lineItems: products,
+    lineItems: productLines.map(({ productId, name, quantity, subtotal: t }) => ({
+      productId, name, quantity, total: String(t),
+    })),
     paymentMethod,
     shippingAddress: shippingAddress ?? {},
+    discountPercent,
+    discountAmount,
+    promoCode: promoCode ?? "",
   };
   orderStore.push(newOrder);
+
+  // Record referral conversion so the referrer earns credit
+  if (discountType === "referral" && promoCode && userEmail) {
+    recordReferralConversion(promoCode, userEmail);
+  }
+
   res.json(newOrder);
 });
 

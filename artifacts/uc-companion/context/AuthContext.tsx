@@ -23,6 +23,7 @@ interface RegisterData {
   password: string;
   firstName: string;
   lastName: string;
+  referralCode?: string;
 }
 
 const AuthContext = createContext<AuthContextValue>({

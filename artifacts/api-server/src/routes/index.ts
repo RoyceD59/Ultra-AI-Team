@@ -9,6 +9,7 @@ import aiMonitorRouter from "./ai/monitor";
 import aiAgentQueryRouter from "./ai/agent-query";
 import ucRouter from "./uc";
 import paymentsRouter from "./payments";
+import referralsRouter from "./referrals";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(aiMonitorRouter);
 router.use(aiAgentQueryRouter);
 router.use(ucRouter);
 router.use(paymentsRouter);
+router.use(referralsRouter);
 
 export default router;

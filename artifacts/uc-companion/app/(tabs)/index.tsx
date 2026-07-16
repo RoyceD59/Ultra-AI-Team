@@ -6,10 +6,33 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useCart } from '@/context/CartContext';
-import { useApi } from '@/hooks/useApi';
+import { useApi, type UCPromotion } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import TrustBadges from '@/components/TrustBadges';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const UC_SKY  = '#52b6dc';
+const UC_DEEP = '#005d8f';
+
+function PromoBanner({ promo, onPress }: { promo: UCPromotion; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85}
+      style={styles.promoBannerCard}>
+      <View style={styles.promoBannerDiscount}>
+        <Text style={styles.promoBannerPct}>{promo.discountPercent}%</Text>
+        <Text style={styles.promoBannerOff}>OFF</Text>
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={styles.promoBannerTitle} numberOfLines={1}>{promo.title}</Text>
+        <Text style={styles.promoBannerDesc} numberOfLines={2}>{promo.description}</Text>
+        <View style={styles.promoBannerCodeWrap}>
+          <Text style={styles.promoBannerCode}>{promo.code}</Text>
+        </View>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.7)" />
+    </TouchableOpacity>
+  );
+}
 
 const QUICK_ACTIONS = [
   { id: 'filter', label: 'Filter Status', icon: 'water-outline' as const, color: '#0054A6', route: '/account' },
@@ -38,6 +61,12 @@ export default function HomeScreen() {
     queryKey: ['products', 'featured'],
     queryFn: () => api.getProducts(),
     staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: promotions } = useQuery({
+    queryKey: ['promotions'],
+    queryFn: () => api.getPromotions(),
+    staleTime: 2 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -93,6 +122,27 @@ export default function HomeScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.mutedForeground} />
         </View>
+
+        {/* Promotions banner — scrollable horizontal strip */}
+        {promotions && promotions.length > 0 && (
+          <View style={styles.promosSection}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Promotions</Text>
+              <TouchableOpacity onPress={() => router.push('/referral' as never)}>
+                <Text style={[styles.seeAll, { color: colors.primary }]}>Refer & Earn</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              horizontal data={promotions}
+              keyExtractor={p => p.id}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 10, paddingVertical: 4 }}
+              renderItem={({ item }) => (
+                <PromoBanner promo={item} onPress={() => router.push('/referral' as never)} />
+              )}
+            />
+          </View>
+        )}
 
         {/* Quick Actions */}
         <View style={styles.section}>
@@ -167,4 +217,19 @@ const styles = StyleSheet.create({
   actionLabel: { fontSize: 13, fontWeight: '600' as const, textAlign: 'center' },
   trustSection: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 10 },
   trustTitle: { fontSize: 11, fontWeight: '700' as const, letterSpacing: 1 },
+  promosSection: { gap: 10 },
+  promoBannerCard: {
+    width: 240, backgroundColor: UC_DEEP, borderRadius: 14,
+    padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10,
+  },
+  promoBannerDiscount: { alignItems: 'center', minWidth: 42 },
+  promoBannerPct: { color: UC_SKY, fontSize: 22, fontWeight: '900' as const, lineHeight: 24 },
+  promoBannerOff: { color: 'rgba(255,255,255,0.75)', fontSize: 10, fontWeight: '700' as const, letterSpacing: 1 },
+  promoBannerTitle: { color: '#fff', fontSize: 14, fontWeight: '700' as const },
+  promoBannerDesc: { color: 'rgba(255,255,255,0.75)', fontSize: 12, lineHeight: 16 },
+  promoBannerCodeWrap: {
+    alignSelf: 'flex-start', marginTop: 4,
+    backgroundColor: UC_SKY + '30', borderRadius: 4, paddingHorizontal: 7, paddingVertical: 2,
+  },
+  promoBannerCode: { color: UC_SKY, fontSize: 11, fontWeight: '800' as const, letterSpacing: 1 },
 });
