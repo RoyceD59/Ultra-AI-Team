@@ -200,6 +200,7 @@ export function useApi() {
       issueDescription: string;
       preferredContactTime: string;
       photos: string[];
+      videos?: string[];
     }) => post<MaintenanceTicket>('/api/uc/tickets', data),
     createWaterTest: (data: {
       name: string;
@@ -207,6 +208,8 @@ export function useApi() {
       phone: string;
       waterSource: string;
       concerns: string;
+      photos?: string[];
+      videos?: string[];
     }) => post<WaterTestRequest>('/api/uc/water-tests', data),
     mpesaSTKPush: (phone: string, amount: number, orderId: string) =>
       post<MpesaResponse>('/api/payments/mpesa', { phone, amount, orderId }),

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Image, Platform, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import { useApi } from '@/hooks/useApi';
 import * as Haptics from 'expo-haptics';
+import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 
 const CONTACT_TIMES = ['Morning (8am–12pm)', 'Afternoon (12pm–5pm)', 'Evening (5pm–8pm)', 'Any time'];
 const PRODUCT_MODELS = ['UCF-500 RO System', 'UCF-200 UF System', 'UCF-UV100 UV Purifier', 'UCF-WH1000 Whole-House', 'Other'];
@@ -17,18 +17,8 @@ export default function NewTicketScreen() {
   const [productModel, setProductModel] = useState('');
   const [issue, setIssue] = useState('');
   const [contactTime, setContactTime] = useState(CONTACT_TIMES[3]!);
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [media, setMedia] = useState<MediaItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
-
-  async function pickPhoto() {
-    if (photos.length >= 4) { Alert.alert('Maximum', 'You can attach up to 4 photos.'); return; }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo access to attach photos.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
-    if (!result.canceled && result.assets[0]) {
-      setPhotos(prev => [...prev, result.assets[0]!.uri]);
-    }
-  }
 
   async function submit() {
     if (!productModel || !issue) {
@@ -38,7 +28,9 @@ export default function NewTicketScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
-      await api.createTicket({ productModel, issueDescription: issue, preferredContactTime: contactTime, photos });
+      const photos = media.filter(m => m.type === 'photo').map(m => m.uri);
+      const videos = media.filter(m => m.type === 'video').map(m => m.uri);
+      await api.createTicket({ productModel, issueDescription: issue, preferredContactTime: contactTime, photos, videos });
       router.push('/(tabs)/support');
       Alert.alert('Submitted!', 'Your maintenance ticket has been received. We will contact you shortly.');
     } catch {
@@ -47,10 +39,11 @@ export default function NewTicketScreen() {
   }
 
   return (
-    <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
+    <ScrollView
+      style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={{ padding: 16, gap: 20, paddingBottom: Platform.OS === 'web' ? 34 : 40 }}
-      keyboardShouldPersistTaps="handled">
-
+      keyboardShouldPersistTaps="handled"
+    >
       {/* Product model */}
       <View style={styles.section}>
         <Text style={[styles.label, { color: colors.text }]}>Product Model *</Text>
@@ -91,27 +84,17 @@ export default function NewTicketScreen() {
         </View>
       </View>
 
-      {/* Photos */}
+      {/* Media attachments */}
       <View style={styles.section}>
-        <Text style={[styles.label, { color: colors.text }]}>Attach Photos ({photos.length}/4)</Text>
-        <View style={styles.photoRow}>
-          {photos.map((uri, i) => (
-            <View key={i} style={styles.photoWrap}>
-              <Image source={{ uri }} style={styles.photo} />
-              <TouchableOpacity onPress={() => setPhotos(prev => prev.filter((_, j) => j !== i))}
-                style={[styles.removePhoto, { backgroundColor: colors.destructive }]}>
-                <Ionicons name="close" size={12} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          ))}
-          {photos.length < 4 && (
-            <TouchableOpacity onPress={pickPhoto} activeOpacity={0.8}
-              style={[styles.addPhoto, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-              <Ionicons name="camera-outline" size={24} color={colors.mutedForeground} />
-              <Text style={[styles.addPhotoText, { color: colors.mutedForeground }]}>Add</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+        <MediaPicker
+          items={media}
+          onChange={setMedia}
+          maxItems={6}
+          label="Attach Photos & Videos"
+        />
+        <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+          Up to 6 items · Videos capped at 15 seconds · Tap a video thumbnail to preview
+        </Text>
       </View>
 
       {/* Submit */}
@@ -135,12 +118,7 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
   textarea: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 14, lineHeight: 21, minHeight: 120, textAlignVertical: 'top' },
-  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  photoWrap: { width: 80, height: 80, borderRadius: 10, overflow: 'hidden' },
-  photo: { width: '100%', height: '100%' },
-  removePhoto: { position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  addPhoto: { width: 80, height: 80, borderRadius: 10, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', gap: 4 },
-  addPhotoText: { fontSize: 11 },
+  hint: { fontSize: 12, lineHeight: 18 },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
 });

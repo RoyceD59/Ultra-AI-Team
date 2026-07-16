@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useApi } from '@/hooks/useApi';
 import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
+import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 
 const WATER_SOURCES = ['Municipal/Tap', 'Borehole', 'Well', 'Rainwater', 'River/Lake', 'Tanker delivery'];
 const CONCERNS = ['Bad taste or odor', 'Discolouration', 'Hardness / scale buildup', 'Skin irritation', 'Gastrointestinal issues', 'General safety check'];
@@ -21,6 +22,7 @@ export default function WaterTestScreen() {
   const [waterSource, setWaterSource] = useState('');
   const [selectedConcerns, setSelectedConcerns] = useState<string[]>([]);
   const [extraConcerns, setExtraConcerns] = useState('');
+  const [media, setMedia] = useState<MediaItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -38,9 +40,13 @@ export default function WaterTestScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
+      const photos = media.filter(m => m.type === 'photo').map(m => m.uri);
+      const videos = media.filter(m => m.type === 'video').map(m => m.uri);
       await api.createWaterTest({
         name, address, phone, waterSource,
         concerns: [...selectedConcerns, extraConcerns].filter(Boolean).join(', '),
+        photos,
+        videos,
       });
       setSubmitted(true);
     } catch {
@@ -67,10 +73,11 @@ export default function WaterTestScreen() {
   }
 
   return (
-    <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
+    <ScrollView
+      style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={{ padding: 16, gap: 20, paddingBottom: Platform.OS === 'web' ? 34 : 40 }}
-      keyboardShouldPersistTaps="handled">
-
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={[styles.header, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
         <Ionicons name="flask" size={28} color={colors.primary} />
         <View style={{ flex: 1 }}>
@@ -125,6 +132,19 @@ export default function WaterTestScreen() {
           style={[styles.textarea, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]} />
       </View>
 
+      {/* Media attachments */}
+      <View style={styles.section}>
+        <MediaPicker
+          items={media}
+          onChange={setMedia}
+          maxItems={4}
+          label="Attach Photos & Videos  (optional)"
+        />
+        <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+          Photos or short videos of your water sample or source help our technician prepare.
+        </Text>
+      </View>
+
       <TouchableOpacity onPress={submit} disabled={submitting}
         style={[styles.submitBtn, { backgroundColor: submitting ? colors.muted : colors.primary }]}>
         {submitting ? <ActivityIndicator color="#fff" size="small" /> : (
@@ -151,6 +171,7 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
   textarea: { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 14, lineHeight: 20, minHeight: 80, textAlignVertical: 'top' },
+  hint: { fontSize: 12, lineHeight: 18 },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
   successIcon: { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
