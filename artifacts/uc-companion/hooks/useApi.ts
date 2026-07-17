@@ -187,6 +187,19 @@ export function useApi() {
     return res.json() as Promise<T>;
   }, [authHeaders]);
 
+  const patch = useCallback(async <T>(path: string, body?: unknown): Promise<T> => {
+    const res = await fetch(`${getBase()}${path}`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string };
+      throw new Error(err.error || `${res.status}`);
+    }
+    return res.json() as Promise<T>;
+  }, [authHeaders]);
+
   return {
     getProducts: (params?: { category?: string; search?: string }) => {
       const qs = new URLSearchParams();
@@ -241,6 +254,10 @@ export function useApi() {
     validateCode: (code: string, userEmail?: string) =>
       post<CodeValidationResult>('/api/uc/referrals/validate', { code, userEmail }),
     getPromotions: () => get<UCPromotion[]>('/api/uc/promotions'),
+    /** Update the authenticated user's profile details (name / phone). */
+    updateProfile: (data: { firstName?: string; lastName?: string; phone?: string }) =>
+      patch<UCCustomer>('/api/uc/customer/profile', data),
+
     /** Register an Expo push token for the authenticated user. */
     registerPushToken: (pushToken: string) =>
       post<{ ok: boolean }>('/api/uc/notify/register', { pushToken }),

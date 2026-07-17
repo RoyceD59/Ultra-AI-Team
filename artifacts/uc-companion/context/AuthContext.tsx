@@ -18,6 +18,8 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (data: RegisterData) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
+  /** Persist updated user fields locally so the UI reflects profile changes immediately. */
+  updateUser: (updates: Partial<Pick<UCUser, 'firstName' | 'lastName' | 'phone'>>) => Promise<void>;
 }
 
 interface RegisterData {
@@ -36,6 +38,7 @@ const AuthContext = createContext<AuthContextValue>({
   login: async () => ({ success: false }),
   register: async () => ({ success: false }),
   logout: async () => {},
+  updateUser: async () => {},
 });
 
 const TOKEN_KEY = 'uc_auth_token';
@@ -134,8 +137,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const updateUser = async (updates: Partial<Pick<UCUser, 'firstName' | 'lastName' | 'phone'>>) => {
+    if (!user) return;
+    const updated: UCUser = { ...user, ...updates };
+    await AsyncStorage.setItem(USER_KEY, JSON.stringify(updated));
+    setUser(updated);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, register, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

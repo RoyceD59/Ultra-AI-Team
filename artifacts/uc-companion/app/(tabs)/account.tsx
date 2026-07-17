@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Platform,
+  Modal, TextInput, ActivityIndicator, KeyboardAvoidingView,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useApi } from '@/hooks/useApi';
 import OrderCard from '@/components/OrderCard';
@@ -15,24 +18,233 @@ import {
   getFilterActivation,
   type FilterActivation,
 } from '@/hooks/useNotifications';
+
 const topPad = Platform.OS === 'web' ? 67 : 0;
 
 const MENU_ITEMS = [
-  { label: 'My Orders', icon: 'bag-outline' as const, route: '/account' },
-  { label: 'Refer & Earn', icon: 'gift-outline' as const, route: '/referral' },
-  { label: 'Maintenance Tickets', icon: 'construct-outline' as const, route: '/ticket/new' },
-  { label: 'Water Test History', icon: 'flask-outline' as const, route: '/water-test' },
+  { label: 'My Orders',                icon: 'bag-outline'           as const, route: '/account' },
+  { label: 'Refer & Earn',             icon: 'gift-outline'          as const, route: '/referral' },
+  { label: 'Maintenance Tickets',      icon: 'construct-outline'     as const, route: '/ticket/new' },
+  { label: 'Water Test History',       icon: 'flask-outline'         as const, route: '/water-test' },
   { label: 'Notification Preferences', icon: 'notifications-outline' as const, route: '/notification-preferences' },
-  { label: 'Help & Support', icon: 'help-circle-outline' as const, route: '/(tabs)/support' },
+  { label: 'Help & Support',           icon: 'help-circle-outline'   as const, route: '/(tabs)/support' },
 ];
 
+// ── Edit Profile Modal ────────────────────────────────────────────────────────
+
+interface EditProfileForm {
+  firstName: string;
+  lastName:  string;
+  phone:     string;
+}
+
+interface EditProfileModalProps {
+  visible:    boolean;
+  initial:    EditProfileForm;
+  email:      string;
+  onClose:    () => void;
+  onSaved:    (updated: EditProfileForm) => void;
+}
+
+function EditProfileModal({ visible, initial, email, onClose, onSaved }: EditProfileModalProps) {
+  const colors  = useColors();
+  const api     = useApi();
+  const { updateUser } = useAuth();
+
+  const [form,    setForm]    = useState<EditProfileForm>(initial);
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState('');
+
+  // Reset form when modal opens with new initial values
+  useEffect(() => {
+    if (visible) { setForm(initial); setError(''); }
+  }, [visible, initial]);
+
+  function setField(field: keyof EditProfileForm, value: string) {
+    setForm(prev => ({ ...prev, [field]: value }));
+    if (error) setError('');
+  }
+
+  async function handleSave() {
+    if (!form.firstName.trim()) {
+      setError('First name is required');
+      return;
+    }
+    if (form.phone.trim() && !/^\+\d{10,15}$/.test(form.phone.replace(/\s/g, ''))) {
+      setError('Enter a valid phone number, e.g. +254712345678');
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setSaving(true);
+    setError('');
+    try {
+      await api.updateProfile({
+        firstName: form.firstName.trim(),
+        lastName:  form.lastName.trim(),
+        phone:     form.phone.replace(/\s/g, ''),
+      });
+      await updateUser({
+        firstName: form.firstName.trim(),
+        lastName:  form.lastName.trim(),
+        phone:     form.phone.replace(/\s/g, ''),
+      });
+      onSaved({
+        firstName: form.firstName.trim(),
+        lastName:  form.lastName.trim(),
+        phone:     form.phone.replace(/\s/g, ''),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <View style={editStyles.overlay}>
+          <View style={[editStyles.sheet, { backgroundColor: colors.background }]}>
+            {/* Handle */}
+            <View style={[editStyles.handle, { backgroundColor: colors.border }]} />
+
+            {/* Header */}
+            <View style={editStyles.header}>
+              <Text style={[editStyles.title, { color: colors.text }]}>Edit Profile</Text>
+              <TouchableOpacity onPress={onClose} style={editStyles.closeBtn} disabled={saving}>
+                <Ionicons name="close" size={22} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={editStyles.body}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}>
+
+              {/* Email — read-only */}
+              <View style={editStyles.fieldGroup}>
+                <Text style={[editStyles.label, { color: colors.mutedForeground }]}>Email (cannot be changed)</Text>
+                <View style={[editStyles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border, opacity: 0.6 }]}>
+                  <Ionicons name="lock-closed-outline" size={15} color={colors.mutedForeground} />
+                  <Text style={[editStyles.readOnly, { color: colors.mutedForeground }]}>{email}</Text>
+                </View>
+              </View>
+
+              {/* First Name */}
+              <View style={editStyles.fieldGroup}>
+                <Text style={[editStyles.label, { color: colors.mutedForeground }]}>First Name *</Text>
+                <View style={[editStyles.inputRow, { backgroundColor: colors.surface, borderColor: error && !form.firstName.trim() ? colors.destructive : colors.border }]}>
+                  <TextInput
+                    value={form.firstName}
+                    onChangeText={v => setField('firstName', v)}
+                    placeholder="First name"
+                    placeholderTextColor={colors.mutedForeground}
+                    style={[editStyles.input, { color: colors.text }]}
+                    autoCapitalize="words"
+                    returnKeyType="next"
+                    editable={!saving}
+                  />
+                </View>
+              </View>
+
+              {/* Last Name */}
+              <View style={editStyles.fieldGroup}>
+                <Text style={[editStyles.label, { color: colors.mutedForeground }]}>Last Name</Text>
+                <View style={[editStyles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <TextInput
+                    value={form.lastName}
+                    onChangeText={v => setField('lastName', v)}
+                    placeholder="Last name"
+                    placeholderTextColor={colors.mutedForeground}
+                    style={[editStyles.input, { color: colors.text }]}
+                    autoCapitalize="words"
+                    returnKeyType="next"
+                    editable={!saving}
+                  />
+                </View>
+              </View>
+
+              {/* Phone */}
+              <View style={editStyles.fieldGroup}>
+                <Text style={[editStyles.label, { color: colors.mutedForeground }]}>Phone Number</Text>
+                <View style={[editStyles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Ionicons name="call-outline" size={15} color={colors.mutedForeground} />
+                  <TextInput
+                    value={form.phone}
+                    onChangeText={v => setField('phone', v)}
+                    placeholder="+254712345678"
+                    placeholderTextColor={colors.mutedForeground}
+                    style={[editStyles.input, { color: colors.text }]}
+                    keyboardType="phone-pad"
+                    returnKeyType="done"
+                    editable={!saving}
+                  />
+                </View>
+                <Text style={[editStyles.hint, { color: colors.mutedForeground }]}>
+                  International format, e.g. +254712345678
+                </Text>
+              </View>
+
+              {/* Error */}
+              {!!error && (
+                <View style={[editStyles.errorBox, { backgroundColor: colors.destructive + '12', borderColor: colors.destructive + '30' }]}>
+                  <Ionicons name="alert-circle-outline" size={15} color={colors.destructive} />
+                  <Text style={[editStyles.errorText, { color: colors.destructive }]}>{error}</Text>
+                </View>
+              )}
+
+              {/* Save button */}
+              <TouchableOpacity
+                onPress={handleSave}
+                disabled={saving}
+                activeOpacity={0.85}
+                style={[editStyles.saveBtn, { backgroundColor: colors.primary, opacity: saving ? 0.7 : 1 }]}>
+                {saving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={editStyles.saveBtnText}>Save Changes</Text>}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const editStyles = StyleSheet.create({
+  overlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheet:       { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: Platform.OS === 'ios' ? 34 : 16, maxHeight: '90%' },
+  handle:      { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 10 },
+  header:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16 },
+  title:       { flex: 1, fontSize: 17, fontWeight: '700' as const },
+  closeBtn:    { padding: 4 },
+  body:        { paddingHorizontal: 20, paddingBottom: 16, gap: 16 },
+  fieldGroup:  { gap: 6 },
+  label:       { fontSize: 12, fontWeight: '600' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
+  inputRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 12 : 10 },
+  input:       { flex: 1, fontSize: 15 },
+  readOnly:    { flex: 1, fontSize: 15 },
+  hint:        { fontSize: 11, marginTop: 2 },
+  errorBox:    { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  errorText:   { flex: 1, fontSize: 13 },
+  saveBtn:     { borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
+  saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+});
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
 export default function AccountScreen() {
-  const colors = useColors();
-  const router = useRouter();
+  const colors      = useColors();
+  const router      = useRouter();
   const { user, logout } = useAuth();
-  const api = useApi();
-  const [notifStatus, setNotifStatus]           = useState<string>('undetermined');
-  const [filterActivation, setFilterActivation] = useState<FilterActivation | null>(null);
+  const api         = useApi();
+  const queryClient = useQueryClient();
+
+  const [notifStatus,       setNotifStatus]       = useState<string>('undetermined');
+  const [filterActivation,  setFilterActivation]  = useState<FilterActivation | null>(null);
+  const [editModalVisible,  setEditModalVisible]   = useState(false);
 
   const refreshNotifStatus = useCallback(async () => {
     if (Platform.OS === 'web') return;
@@ -80,142 +292,237 @@ export default function AccountScreen() {
     );
   }
 
-  const initials = `${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase();
+  const initials     = `${user.firstName[0] ?? ''}${user.lastName[0] ?? ''}`.toUpperCase() || '?';
   const recentOrders = orders?.slice(0, 3) ?? [];
 
+  const editInitial: EditProfileForm = {
+    firstName: user.firstName,
+    lastName:  user.lastName,
+    phone:     user.phone ?? '',
+  };
+
   return (
-    <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={{ paddingBottom: Platform.OS === 'web' ? 34 : 80 }}>
+    <>
+      <ScrollView
+        style={[styles.screen, { backgroundColor: colors.background }]}
+        contentContainerStyle={{ paddingBottom: Platform.OS === 'web' ? 34 : 80 }}>
 
-      {/* Notification permission prompt — shown until granted */}
-      {Platform.OS !== 'web' && notifStatus !== 'granted' && (
-        <View style={[styles.notifCard, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
-          <View style={[styles.notifIconWrap, { backgroundColor: colors.primary }]}>
-            <Ionicons name="notifications-outline" size={22} color="#fff" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.notifTitle, { color: colors.text }]}>Stay informed</Text>
-            <Text style={[styles.notifSub, { color: colors.mutedForeground }]}>
-              Get order updates and filter replacement reminders
-            </Text>
-          </View>
-          {notifStatus === 'denied' ? (
-            <Text style={[styles.notifDenied, { color: colors.mutedForeground }]}>
-              Enable in Settings
-            </Text>
-          ) : (
-            <TouchableOpacity onPress={enableNotifications}
-              style={[styles.notifBtn, { backgroundColor: colors.primary }]}>
-              <Text style={styles.notifBtnTxt}>Enable</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
-      {/* Profile header */}
-      <View style={[styles.profileHeader, { backgroundColor: colors.primary, paddingTop: topPad + 16 }]}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.profileName}>{user.firstName} {user.lastName}</Text>
-          <Text style={styles.profileEmail}>{user.email}</Text>
-          {!!user.phone && (
-            <View style={styles.profilePhoneRow}>
-              <Ionicons name="call-outline" size={12} color="rgba(255,255,255,0.7)" />
-              <Text style={styles.profilePhone}>{user.phone}</Text>
+        {/* Notification permission prompt */}
+        {Platform.OS !== 'web' && notifStatus !== 'granted' && (
+          <View style={[styles.notifCard, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+            <View style={[styles.notifIconWrap, { backgroundColor: colors.primary }]}>
+              <Ionicons name="notifications-outline" size={22} color="#fff" />
             </View>
-          )}
-        </View>
-      </View>
-
-      <View style={styles.body}>
-        {/* Filter tracker */}
-        <FilterTrackerSection
-          activation={filterActivation}
-          onActivationChange={a => {
-            setFilterActivation(a);
-            // Refresh permission status in case user just granted it
-            refreshNotifStatus();
-          }}
-        />
-
-        {/* Recent orders */}
-        {recentOrders.length > 0 && (
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Orders</Text>
-            <View style={{ gap: 10 }}>
-              {recentOrders.map(order => (
-                <OrderCard key={order.id} order={order}
-                  onPress={() => router.push(`/order/${order.id}` as never)} />
-              ))}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.notifTitle, { color: colors.text }]}>Stay informed</Text>
+              <Text style={[styles.notifSub, { color: colors.mutedForeground }]}>
+                Get order updates and filter replacement reminders
+              </Text>
             </View>
+            {notifStatus === 'denied' ? (
+              <Text style={[styles.notifDenied, { color: colors.mutedForeground }]}>
+                Enable in Settings
+              </Text>
+            ) : (
+              <TouchableOpacity onPress={enableNotifications}
+                style={[styles.notifBtn, { backgroundColor: colors.primary }]}>
+                <Text style={styles.notifBtnTxt}>Enable</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
-        {/* Menu */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>My Account</Text>
-          <View style={[styles.menuCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {MENU_ITEMS.map((item, i) => (
-              <TouchableOpacity key={item.label}
-                onPress={() => router.push(item.route as never)}
-                activeOpacity={0.75}
-                style={[styles.menuItem, i < MENU_ITEMS.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
-                <View style={[styles.menuIcon, { backgroundColor: colors.surface }]}>
-                  <Ionicons name={item.icon} size={18} color={colors.primary} />
-                </View>
-                <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            ))}
+        {/* Profile header */}
+        <View style={[styles.profileHeader, { backgroundColor: colors.primary, paddingTop: topPad + 16 }]}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials}</Text>
           </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.profileName}>{user.firstName} {user.lastName}</Text>
+            <Text style={styles.profileEmail}>{user.email}</Text>
+            {!!user.phone && (
+              <View style={styles.profilePhoneRow}>
+                <Ionicons name="call-outline" size={12} color="rgba(255,255,255,0.7)" />
+                <Text style={styles.profilePhone}>{user.phone}</Text>
+              </View>
+            )}
+          </View>
+          {/* Edit button in header */}
+          <TouchableOpacity
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); setEditModalVisible(true); }}
+            style={styles.editHeaderBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="pencil-outline" size={16} color="rgba(255,255,255,0.9)" />
+          </TouchableOpacity>
         </View>
 
-        {/* Logout */}
-        <TouchableOpacity onPress={async () => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          await logout();
-        }} style={[styles.logoutBtn, { borderColor: colors.destructive }]}>
-          <Ionicons name="log-out-outline" size={18} color={colors.destructive} />
-          <Text style={[styles.logoutText, { color: colors.destructive }]}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+        <View style={styles.body}>
+          {/* My Details card */}
+          <View style={styles.section}>
+            <View style={styles.sectionRow}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>My Details</Text>
+              <TouchableOpacity
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); setEditModalVisible(true); }}
+                activeOpacity={0.75}
+                style={[styles.editBtn, { borderColor: colors.primary }]}>
+                <Ionicons name="pencil-outline" size={13} color={colors.primary} />
+                <Text style={[styles.editBtnText, { color: colors.primary }]}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={[styles.detailsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {/* Name */}
+              <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
+                <View style={[styles.detailIconWrap, { backgroundColor: colors.surface }]}>
+                  <Ionicons name="person-outline" size={15} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Full Name</Text>
+                  <Text style={[styles.detailValue, { color: colors.text }]}>
+                    {[user.firstName, user.lastName].filter(Boolean).join(' ') || '—'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Email */}
+              <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
+                <View style={[styles.detailIconWrap, { backgroundColor: colors.surface }]}>
+                  <Ionicons name="mail-outline" size={15} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Email</Text>
+                  <Text style={[styles.detailValue, { color: colors.text }]}>{user.email}</Text>
+                </View>
+                <View style={[styles.lockedBadge, { backgroundColor: colors.surface }]}>
+                  <Ionicons name="lock-closed-outline" size={11} color={colors.mutedForeground} />
+                </View>
+              </View>
+
+              {/* Phone */}
+              <View style={[styles.detailRow, { borderBottomWidth: 0 }]}>
+                <View style={[styles.detailIconWrap, { backgroundColor: colors.surface }]}>
+                  <Ionicons name="call-outline" size={15} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Phone</Text>
+                  <Text style={[styles.detailValue, { color: user.phone ? colors.text : colors.mutedForeground }]}>
+                    {user.phone || 'Not added yet'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* Filter tracker */}
+          <FilterTrackerSection
+            activation={filterActivation}
+            onActivationChange={a => {
+              setFilterActivation(a);
+              refreshNotifStatus();
+            }}
+          />
+
+          {/* Recent orders */}
+          {recentOrders.length > 0 && (
+            <View style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Orders</Text>
+              <View style={{ gap: 10 }}>
+                {recentOrders.map(order => (
+                  <OrderCard key={order.id} order={order}
+                    onPress={() => router.push(`/order/${order.id}` as never)} />
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Menu */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>My Account</Text>
+            <View style={[styles.menuCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {MENU_ITEMS.map((item, i) => (
+                <TouchableOpacity key={item.label}
+                  onPress={() => router.push(item.route as never)}
+                  activeOpacity={0.75}
+                  style={[styles.menuItem, i < MENU_ITEMS.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
+                  <View style={[styles.menuIcon, { backgroundColor: colors.surface }]}>
+                    <Ionicons name={item.icon} size={18} color={colors.primary} />
+                  </View>
+                  <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Logout */}
+          <TouchableOpacity onPress={async () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await logout();
+            queryClient.clear();
+          }} style={[styles.logoutBtn, { borderColor: colors.destructive }]}>
+            <Ionicons name="log-out-outline" size={18} color={colors.destructive} />
+            <Text style={[styles.logoutText, { color: colors.destructive }]}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      {/* Edit Profile Modal */}
+      <EditProfileModal
+        visible={editModalVisible}
+        initial={editInitial}
+        email={user.email}
+        onClose={() => setEditModalVisible(false)}
+        onSaved={() => setEditModalVisible(false)}
+      />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  guestContainer: { flex: 1, alignItems: 'center', padding: 40, gap: 16 },
-  avatarPlaceholder: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
-  guestTitle: { fontSize: 22, fontWeight: '700' as const, textAlign: 'center' },
-  guestSub: { fontSize: 14, textAlign: 'center', lineHeight: 22 },
-  loginBtn: { paddingVertical: 14, paddingHorizontal: 48, borderRadius: 12, marginTop: 8 },
-  loginBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
-  registerLink: { padding: 8 },
+  screen:           { flex: 1 },
+  guestContainer:   { flex: 1, alignItems: 'center', padding: 40, gap: 16 },
+  avatarPlaceholder:{ width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
+  guestTitle:       { fontSize: 22, fontWeight: '700' as const, textAlign: 'center' },
+  guestSub:         { fontSize: 14, textAlign: 'center', lineHeight: 22 },
+  loginBtn:         { paddingVertical: 14, paddingHorizontal: 48, borderRadius: 12, marginTop: 8 },
+  loginBtnText:     { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  registerLink:     { padding: 8 },
   registerLinkText: { fontSize: 15, fontWeight: '500' as const },
-  profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingBottom: 24 },
-  avatar: { width: 54, height: 54, borderRadius: 27, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#fff', fontSize: 20, fontWeight: '700' as const },
-  profileName: { color: '#fff', fontSize: 18, fontWeight: '700' as const },
-  profileEmail: { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 2 },
-  profilePhoneRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginTop: 3 },
-  profilePhone: { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
-  body: { padding: 16, gap: 20 },
-  section: { gap: 12 },
-  sectionTitle: { fontSize: 17, fontWeight: '700' as const },
-  menuCard: { borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  menuIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  menuLabel: { flex: 1, fontSize: 15, fontWeight: '500' as const },
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderRadius: 12, paddingVertical: 14 },
-  logoutText: { fontSize: 15, fontWeight: '600' as const },
-  notifCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 14, marginTop: topPad + 12, marginHorizontal: 16 },
-  notifIconWrap: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  notifTitle: { fontSize: 14, fontWeight: '600' as const },
-  notifSub: { fontSize: 12, marginTop: 2 },
-  notifBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
-  notifBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '600' as const },
-  notifDenied: { fontSize: 11, maxWidth: 72, textAlign: 'center' },
+
+  profileHeader:    { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingBottom: 24 },
+  avatar:           { width: 54, height: 54, borderRadius: 27, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center' },
+  avatarText:       { color: '#fff', fontSize: 20, fontWeight: '700' as const },
+  profileName:      { color: '#fff', fontSize: 18, fontWeight: '700' as const },
+  profileEmail:     { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 2 },
+  profilePhoneRow:  { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginTop: 3 },
+  profilePhone:     { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
+  editHeaderBtn:    { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+
+  body:             { padding: 16, gap: 20 },
+  section:          { gap: 12 },
+  sectionRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionTitle:     { fontSize: 17, fontWeight: '700' as const },
+  editBtn:          { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  editBtnText:      { fontSize: 13, fontWeight: '600' as const },
+
+  detailsCard:      { borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
+  detailRow:        { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: 1 },
+  detailIconWrap:   { width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  detailLabel:      { fontSize: 11, fontWeight: '500' as const, marginBottom: 2 },
+  detailValue:      { fontSize: 15, fontWeight: '500' as const },
+  lockedBadge:      { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+
+  menuCard:         { borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
+  menuItem:         { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  menuIcon:         { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  menuLabel:        { flex: 1, fontSize: 15, fontWeight: '500' as const },
+  logoutBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderRadius: 12, paddingVertical: 14 },
+  logoutText:       { fontSize: 15, fontWeight: '600' as const },
+
+  notifCard:        { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 14, marginTop: topPad + 12, marginHorizontal: 16 },
+  notifIconWrap:    { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  notifTitle:       { fontSize: 14, fontWeight: '600' as const },
+  notifSub:         { fontSize: 12, marginTop: 2 },
+  notifBtn:         { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+  notifBtnTxt:      { color: '#fff', fontSize: 13, fontWeight: '600' as const },
+  notifDenied:      { fontSize: 11, maxWidth: 72, textAlign: 'center' },
 });

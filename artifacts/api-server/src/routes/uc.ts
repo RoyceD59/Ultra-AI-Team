@@ -704,6 +704,72 @@ router.get("/uc/customer/profile", async (req: Request, res: Response): Promise<
   });
 });
 
+router.patch("/uc/customer/profile", async (req: Request, res: Response): Promise<void> => {
+  const claims = verifyToken(req.headers["authorization"]);
+  if (!claims) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const { firstName, lastName, phone } = req.body as {
+    firstName?: string;
+    lastName?:  string;
+    phone?:     string;
+  };
+
+  if (firstName !== undefined && !firstName.trim()) {
+    res.status(400).json({ error: "First name cannot be empty" });
+    return;
+  }
+  if (phone !== undefined && phone !== "") {
+    const cleanPhone = phone.replace(/\s/g, "");
+    if (!/^\+\d{10,15}$/.test(cleanPhone)) {
+      res.status(400).json({ error: "Enter a valid phone number in international format, e.g. +254712345678" });
+      return;
+    }
+  }
+
+  const numericId = Number(claims.id);
+  if (isNaN(numericId) || numericId <= 0 || numericId >= 1_000_000_000) {
+    res.status(403).json({ error: "Profile update is only available for registered accounts" });
+    return;
+  }
+
+  const updates: Record<string, string> = {};
+  if (firstName !== undefined) updates["firstName"] = firstName.trim();
+  if (lastName  !== undefined) updates["lastName"]  = lastName.trim();
+  if (phone     !== undefined) updates["phone"]     = phone.replace(/\s/g, "");
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No fields to update" });
+    return;
+  }
+
+  try {
+    const [updated] = await db
+      .update(ucUsersTable)
+      .set(updates)
+      .where(eq(ucUsersTable.id, numericId))
+      .returning();
+
+    if (!updated) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    res.json({
+      id:        updated.id,
+      email:     updated.email,
+      phone:     updated.phone,
+      firstName: updated.firstName,
+      lastName:  updated.lastName,
+    });
+  } catch (err) {
+    console.error("[profile patch] error:", err);
+    res.status(500).json({ error: "Failed to update profile. Please try again." });
+  }
+});
+
 // ─── Payment verification helpers (server-side; called before order creation) ─
 async function verifyPaymentOnServer(
   method: string,
