@@ -20,6 +20,18 @@ export interface UCProduct {
   stockStatus: 'instock' | 'outofstock';
   stockQuantity: number | null;
   tags: { name: string }[];
+  enquiryOnly?: boolean;
+}
+
+export interface UCEnquiry {
+  id: number;
+  productId: string;
+  productName: string;
+  name: string;
+  email: string;
+  phone: string;
+  message: string;
+  createdAt: string;
 }
 
 export interface UCOrder {
@@ -232,5 +244,14 @@ export function useApi() {
     /** Register an Expo push token for the authenticated user. */
     registerPushToken: (pushToken: string) =>
       post<{ ok: boolean }>('/api/uc/notify/register', { pushToken }),
+    /** Submit a product enquiry (works for guests and logged-in users). */
+    createEnquiry: (data: {
+      productId: number;
+      productName: string;
+      name: string;
+      email: string;
+      phone: string;
+      message: string;
+    }) => post<{ ok: boolean; message: string }>('/api/uc/enquiries', data),
   };
 }

@@ -39,8 +39,9 @@ export default function ProductDetailScreen() {
     </View>
   );
 
+  const isEnquiryOnly = product.enquiryOnly === true;
   const displayPrice = product.salePrice || product.price || product.regularPrice;
-  const isOnSale = product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
+  const isOnSale = !isEnquiryOnly && product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
   const inStock = product.stockStatus === 'instock';
 
   return (
@@ -70,25 +71,36 @@ export default function ProductDetailScreen() {
           <Text style={[styles.name, { color: colors.text }]}>{product.name}</Text>
           <Text style={[styles.sku, { color: colors.mutedForeground }]}>SKU: {product.sku}</Text>
 
-          <View style={styles.priceRow}>
-            <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
-            {isOnSale && (
-              <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
-            )}
-            <View style={[styles.stockBadge, { backgroundColor: inStock ? colors.successLight : '#FFF0F0' }]}>
-              <Ionicons name={inStock ? 'checkmark-circle-outline' : 'close-circle-outline'} size={13}
-                color={inStock ? colors.success : colors.destructive} />
-              <Text style={[styles.stockText, { color: inStock ? colors.success : colors.destructive }]}>
-                {inStock ? 'In Stock' : 'Out of Stock'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Prices match website badge */}
-          <View style={[styles.matchBadge, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
-            <Ionicons name="shield-checkmark-outline" size={14} color={colors.primary} />
-            <Text style={[styles.matchText, { color: colors.primary }]}>Prices match our website — guaranteed</Text>
-          </View>
+          {isEnquiryOnly
+            ? <View style={[styles.enquiryBanner, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+                <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.enquiryBannerTitle, { color: colors.primary }]}>Pricing on request</Text>
+                  <Text style={[styles.enquiryBannerSub, { color: colors.mutedForeground }]}>
+                    Contact us for a personalised quote — usually within 24 hours.
+                  </Text>
+                </View>
+              </View>
+            : <>
+                <View style={styles.priceRow}>
+                  <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
+                  {isOnSale && (
+                    <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
+                  )}
+                  <View style={[styles.stockBadge, { backgroundColor: inStock ? colors.successLight : '#FFF0F0' }]}>
+                    <Ionicons name={inStock ? 'checkmark-circle-outline' : 'close-circle-outline'} size={13}
+                      color={inStock ? colors.success : colors.destructive} />
+                    <Text style={[styles.stockText, { color: inStock ? colors.success : colors.destructive }]}>
+                      {inStock ? 'In Stock' : 'Out of Stock'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.matchBadge, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+                  <Ionicons name="shield-checkmark-outline" size={14} color={colors.primary} />
+                  <Text style={[styles.matchText, { color: colors.primary }]}>Prices match our website — guaranteed</Text>
+                </View>
+              </>
+          }
 
           {/* Description */}
           <Text style={[styles.sectionLabel, { color: colors.text }]}>Product Details</Text>
@@ -111,27 +123,42 @@ export default function ProductDetailScreen() {
 
       {/* Bottom CTA */}
       <View style={[styles.footer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.push('/cart')} activeOpacity={0.8}
-          style={[styles.cartIcon, { borderColor: colors.border }]}>
-          <Ionicons name="cart-outline" size={22} color={colors.primary} />
-          {totalItems > 0 && (
-            <View style={styles.badge}><Text style={styles.badgeText}>{totalItems}</Text></View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          disabled={!inStock}
-          onPress={() => {
-            if (!inStock) return;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            addItem({ id: product.id, name: product.name, price: parseFloat(displayPrice), quantity: 1, image: product.images[0]?.src ?? '', sku: product.sku });
-            router.push('/cart');
-          }}
-          style={[styles.addBtn, { backgroundColor: inStock ? colors.primary : colors.muted }]}>
-          <Ionicons name="cart-outline" size={20} color={inStock ? '#fff' : colors.mutedForeground} />
-          <Text style={[styles.addBtnText, { color: inStock ? '#fff' : colors.mutedForeground }]}>
-            {inStock ? 'Add to Cart' : 'Out of Stock'}
-          </Text>
-        </TouchableOpacity>
+        {isEnquiryOnly ? (
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push(`/enquiry?productId=${product.id}&productName=${encodeURIComponent(product.name)}`);
+            }}
+            style={[styles.addBtn, { backgroundColor: colors.primary }]}
+            activeOpacity={0.85}>
+            <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" />
+            <Text style={[styles.addBtnText, { color: '#fff' }]}>Enquire About This Product</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity onPress={() => router.push('/cart')} activeOpacity={0.8}
+              style={[styles.cartIcon, { borderColor: colors.border }]}>
+              <Ionicons name="cart-outline" size={22} color={colors.primary} />
+              {totalItems > 0 && (
+                <View style={styles.badge}><Text style={styles.badgeText}>{totalItems}</Text></View>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              disabled={!inStock}
+              onPress={() => {
+                if (!inStock) return;
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                addItem({ id: product.id, name: product.name, price: parseFloat(displayPrice), quantity: 1, image: product.images[0]?.src ?? '', sku: product.sku });
+                router.push('/cart');
+              }}
+              style={[styles.addBtn, { backgroundColor: inStock ? colors.primary : colors.muted }]}>
+              <Ionicons name="cart-outline" size={20} color={inStock ? '#fff' : colors.mutedForeground} />
+              <Text style={[styles.addBtnText, { color: inStock ? '#fff' : colors.mutedForeground }]}>
+                {inStock ? 'Add to Cart' : 'Out of Stock'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
     </View>
   );
@@ -163,4 +190,7 @@ const styles = StyleSheet.create({
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' as const },
   addBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 12, paddingVertical: 14 },
   addBtnText: { fontSize: 16, fontWeight: '700' as const },
+  enquiryBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderWidth: 1, borderRadius: 12, padding: 14 },
+  enquiryBannerTitle: { fontSize: 15, fontWeight: '700' as const },
+  enquiryBannerSub: { fontSize: 13, marginTop: 2, lineHeight: 18 },
 });

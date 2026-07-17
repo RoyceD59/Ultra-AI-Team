@@ -5,7 +5,7 @@ import {
   registerReferralAtSignup,
 } from "./referrals";
 import { issueToken, verifyToken } from "../lib/jwt.js";
-import { db, ucPushTokensTable } from "@workspace/db";
+import { db, ucPushTokensTable, ucEnquiriesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router = Router();
@@ -1013,6 +1013,92 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
   } catch (err) {
     res.status(500).json({ error: "Push notification failed", detail: String(err) });
   }
+});
+
+// ─── Enquiries ────────────────────────────────────────────────────────────────
+
+/**
+ * Send a plain-text notification email to info@ucfilters.com via the Resend API.
+ * No-ops when RESEND_API_KEY is absent — falls back to a console log so the
+ * team can see the submission in server logs.
+ */
+async function sendEnquiryEmail(enquiry: {
+  productName: string;
+  name: string;
+  email: string;
+  phone: string;
+  message: string;
+}): Promise<void> {
+  const apiKey = process.env["RESEND_API_KEY"];
+  if (!apiKey) {
+    console.info("[enquiry] No RESEND_API_KEY — logging submission:", enquiry);
+    return;
+  }
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        from: "Ultra Clear App <noreply@ucfilters.com>",
+        to: "info@ucfilters.com",
+        subject: `New Enquiry: ${enquiry.productName}`,
+        text: [
+          `Product: ${enquiry.productName}`,
+          `Name:    ${enquiry.name}`,
+          `Email:   ${enquiry.email}`,
+          `Phone:   ${enquiry.phone}`,
+          "",
+          enquiry.message,
+        ].join("\n"),
+      }),
+    });
+  } catch { /* fire-and-forget — never block the response */ }
+}
+
+/** In-memory fallback when the DB insert fails (e.g. table not yet created). */
+const enquiryStoreFallback: Record<string, unknown>[] = [];
+
+router.post("/uc/enquiries", async (req: Request, res: Response): Promise<void> => {
+  const { productId, productName, name, email, phone, message } = req.body as {
+    productId?: number;
+    productName?: string;
+    name?: string;
+    email?: string;
+    phone?: string;
+    message?: string;
+  };
+  if (!productId || !productName || !name || !email || !phone || !message) {
+    res.status(400).json({ error: "All fields are required" });
+    return;
+  }
+
+  const userId = userIdFromBearer(req.headers["authorization"]);
+
+  try {
+    await db.insert(ucEnquiriesTable).values({
+      userId: userId === "anonymous" ? null : userId,
+      productId: String(productId),
+      productName,
+      name,
+      email,
+      phone,
+      message,
+    });
+  } catch {
+    // DB not yet available — store in memory so we don't lose the lead
+    enquiryStoreFallback.push({
+      productId, productName, name, email, phone, message,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Fire-and-forget email notification
+  sendEnquiryEmail({ productName, name, email, phone, message }).catch(() => {});
+
+  res.status(201).json({
+    ok: true,
+    message: "Enquiry received. We'll be in touch within 24 hours.",
+  });
 });
 
 // ─── Locations ────────────────────────────────────────────────────────────────

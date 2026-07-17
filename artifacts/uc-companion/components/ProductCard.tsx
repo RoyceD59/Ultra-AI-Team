@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { UCProduct } from '@/hooks/useApi';
 import { useCart } from '@/context/CartContext';
@@ -20,8 +21,10 @@ function formatKES(price: string) {
 
 export default function ProductCard({ product, onPress, layout = 'grid' }: Props) {
   const colors = useColors();
+  const router = useRouter();
   const { addItem } = useCart();
-  const isOnSale = product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
+  const isEnquiryOnly = product.enquiryOnly === true;
+  const isOnSale = !isEnquiryOnly && product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
   const displayPrice = product.salePrice || product.price || product.regularPrice;
 
   const handleAddToCart = () => {
@@ -34,6 +37,11 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
       image: product.images[0]?.src ?? '',
       sku: product.sku,
     });
+  };
+
+  const handleEnquire = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push(`/enquiry?productId=${product.id}&productName=${encodeURIComponent(product.name)}`);
   };
 
   if (layout === 'list') {
@@ -53,16 +61,29 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
             {product.categories[0]?.name ?? ''}
           </Text>
           <View style={styles.listPriceRow}>
-            <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
-            {isOnSale && (
-              <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
-            )}
+            {isEnquiryOnly
+              ? <View style={[styles.enquirePill, { backgroundColor: colors.primaryLight }]}>
+                  <Text style={[styles.enquirePillText, { color: colors.primary }]}>Enquire for pricing</Text>
+                </View>
+              : <>
+                  <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
+                  {isOnSale && (
+                    <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
+                  )}
+                </>
+            }
           </View>
         </View>
-        <TouchableOpacity onPress={handleAddToCart} activeOpacity={0.7}
-          style={[styles.addBtn, { backgroundColor: colors.primary }]}>
-          <Ionicons name="add" size={20} color="#fff" />
-        </TouchableOpacity>
+        {isEnquiryOnly
+          ? <TouchableOpacity onPress={handleEnquire} activeOpacity={0.7}
+              style={[styles.addBtn, { backgroundColor: colors.accent }]}>
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+            </TouchableOpacity>
+          : <TouchableOpacity onPress={handleAddToCart} activeOpacity={0.7}
+              style={[styles.addBtn, { backgroundColor: colors.primary }]}>
+              <Ionicons name="add" size={20} color="#fff" />
+            </TouchableOpacity>
+        }
       </TouchableOpacity>
     );
   }
@@ -70,12 +91,17 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.85}
       style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      {isOnSale && (
+      {!isEnquiryOnly && isOnSale && (
         <View style={[styles.saleBadge, { backgroundColor: colors.destructive }]}>
           <Text style={styles.saleBadgeText}>SALE</Text>
         </View>
       )}
-      {product.tags.some(t => t.name === 'bestseller') && (
+      {isEnquiryOnly && (
+        <View style={[styles.saleBadge, { backgroundColor: colors.accent }]}>
+          <Text style={styles.saleBadgeText}>ENQUIRE</Text>
+        </View>
+      )}
+      {!isEnquiryOnly && product.tags.some(t => t.name === 'bestseller') && (
         <View style={[styles.saleBadge, { backgroundColor: colors.accent, left: 'auto' as never, right: 8 }]}>
           <Text style={styles.saleBadgeText}>TOP</Text>
         </View>
@@ -92,17 +118,30 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
           {product.categories[0]?.name ?? ''}
         </Text>
         <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>{product.name}</Text>
-        <View style={styles.priceRow}>
-          <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
-          {isOnSale && (
-            <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
-          )}
-        </View>
-        <TouchableOpacity onPress={handleAddToCart} activeOpacity={0.8}
-          style={[styles.cartBtn, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
-          <Ionicons name="cart-outline" size={14} color={colors.primary} />
-          <Text style={[styles.cartBtnText, { color: colors.primary }]}>Add to Cart</Text>
-        </TouchableOpacity>
+
+        {isEnquiryOnly
+          ? <>
+              <Text style={[styles.enquireLabel, { color: colors.mutedForeground }]}>Pricing on request</Text>
+              <TouchableOpacity onPress={handleEnquire} activeOpacity={0.8}
+                style={[styles.cartBtn, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+                <Ionicons name="chatbubble-ellipses-outline" size={14} color={colors.primary} />
+                <Text style={[styles.cartBtnText, { color: colors.primary }]}>Get Pricing</Text>
+              </TouchableOpacity>
+            </>
+          : <>
+              <View style={styles.priceRow}>
+                <Text style={[styles.price, { color: colors.primary }]}>{formatKES(displayPrice)}</Text>
+                {isOnSale && (
+                  <Text style={[styles.oldPrice, { color: colors.mutedForeground }]}>{formatKES(product.regularPrice)}</Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={handleAddToCart} activeOpacity={0.8}
+                style={[styles.cartBtn, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+                <Ionicons name="cart-outline" size={14} color={colors.primary} />
+                <Text style={[styles.cartBtnText, { color: colors.primary }]}>Add to Cart</Text>
+              </TouchableOpacity>
+            </>
+        }
       </View>
     </TouchableOpacity>
   );
@@ -120,6 +159,9 @@ const styles = StyleSheet.create({
   priceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   price: { fontSize: 15, fontWeight: '700' as const },
   oldPrice: { fontSize: 12, textDecorationLine: 'line-through' },
+  enquireLabel: { fontSize: 12, fontStyle: 'italic' },
+  enquirePill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  enquirePillText: { fontSize: 11, fontWeight: '600' as const },
   cartBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     borderWidth: 1, borderRadius: 8, paddingVertical: 6, marginTop: 4 },
   cartBtnText: { fontSize: 12, fontWeight: '600' as const },
