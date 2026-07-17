@@ -294,6 +294,7 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
     const mockUser = {
       id:        Date.now(),
       email,
+      phone:     "",   // not collected at login; populated from the stored account
       firstName: name.charAt(0).toUpperCase() + name.slice(1),
       lastName:  "Customer",
     };
@@ -304,18 +305,24 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
 });
 
 router.post("/uc/auth/register", async (req: Request, res: Response): Promise<void> => {
-  const { email, password, firstName, lastName, referralCode } = req.body as {
+  const { email, phone, password, firstName, lastName, referralCode } = req.body as {
     email?: string;
+    phone?: string;
     password?: string;
     firstName?: string;
     lastName?: string;
     referralCode?: string;
   };
-  if (!email || !password || !firstName) {
-    res.status(400).json({ error: "Required fields missing" });
+  if (!email || !phone || !password || !firstName) {
+    res.status(400).json({ error: "First name, email, phone number and password are required" });
     return;
   }
-  const user = { id: Date.now(), email, firstName, lastName: lastName ?? "" };
+  // Basic phone sanity check — must start with + and contain 10-15 digits
+  if (!/^\+\d{10,15}$/.test(phone.replace(/\s/g, ""))) {
+    res.status(400).json({ error: "Enter a valid phone number in international format, e.g. +254712345678" });
+    return;
+  }
+  const user = { id: Date.now(), email, phone: phone.replace(/\s/g, ""), firstName, lastName: lastName ?? "" };
   // Store referral association so first-order discount can be applied later
   if (referralCode?.trim()) {
     registerReferralAtSignup(email, referralCode.trim());

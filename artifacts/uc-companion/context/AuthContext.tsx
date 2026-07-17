@@ -5,6 +5,7 @@ import { getExpoPushToken } from '@/hooks/useNotifications';
 export interface UCUser {
   id: number;
   email: string;
+  phone: string;
   firstName: string;
   lastName: string;
   token: string;
@@ -21,6 +22,7 @@ interface AuthContextValue {
 
 interface RegisterData {
   email: string;
+  phone: string;
   password: string;
   firstName: string;
   lastName: string;

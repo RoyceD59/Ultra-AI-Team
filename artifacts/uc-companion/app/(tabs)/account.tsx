@@ -119,6 +119,12 @@ export default function AccountScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.profileName}>{user.firstName} {user.lastName}</Text>
           <Text style={styles.profileEmail}>{user.email}</Text>
+          {!!user.phone && (
+            <View style={styles.profilePhoneRow}>
+              <Ionicons name="call-outline" size={12} color="rgba(255,255,255,0.7)" />
+              <Text style={styles.profilePhone}>{user.phone}</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -193,6 +199,8 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontSize: 20, fontWeight: '700' as const },
   profileName: { color: '#fff', fontSize: 18, fontWeight: '700' as const },
   profileEmail: { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 2 },
+  profilePhoneRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginTop: 3 },
+  profilePhone: { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
   body: { padding: 16, gap: 20 },
   section: { gap: 12 },
   sectionTitle: { fontSize: 17, fontWeight: '700' as const },
