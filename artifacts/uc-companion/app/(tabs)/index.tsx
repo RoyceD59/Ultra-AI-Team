@@ -10,7 +10,7 @@ import { useApi, type UCPromotion } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import TrustBadges from '@/components/TrustBadges';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getFilterActivation } from '@/hooks/useNotifications';
+import { getFilterActivation, effectiveLifespanDays } from '@/hooks/useNotifications';
 
 const UC_SKY  = '#52b6dc';
 const UC_DEEP = '#005d8f';
@@ -56,6 +56,7 @@ export default function HomeScreen() {
   const { totalItems } = useCart();
   const api = useApi();
   const [filterDays, setFilterDays] = useState<number | null>(null);
+  const [filterAdjusted, setFilterAdjusted] = useState(false);
   const topPad = Platform.OS === 'web' ? 67 : 0;
 
   const { data: products, isLoading } = useQuery({
@@ -74,14 +75,18 @@ export default function HomeScreen() {
     // Primary: use the structured FilterActivation record (product-specific lifespan)
     getFilterActivation().then(activation => {
       if (activation) {
-        const elapsed  = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
-        setFilterDays(activation.lifespanDays - elapsed);
+        const elapsed   = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
+        const effDays   = effectiveLifespanDays(activation);
+        const ratedDays = activation.lifespanDays;
+        setFilterDays(effDays - elapsed);
+        // Show "adjusted" note if a check-in has reduced the effective lifespan
+        setFilterAdjusted(activation.lastCheckIn != null && effDays < ratedDays);
         return;
       }
       // Fallback: legacy uc_filter_last_changed key (180-day assumption)
       AsyncStorage.getItem('uc_filter_last_changed').then(v => {
         if (v) {
-          const elapsed  = Math.floor((Date.now() - parseInt(v)) / 86_400_000);
+          const elapsed = Math.floor((Date.now() - parseInt(v)) / 86_400_000);
           setFilterDays(180 - elapsed);
         }
       });
@@ -121,7 +126,9 @@ export default function HomeScreen() {
                 <Text style={[styles.filterTitle, { color: colors.text }]}>
                   {filterDays > 0 ? `${filterDays} days until next filter change` : 'Filter replacement overdue!'}
                 </Text>
-                <Text style={[styles.filterSub, { color: colors.mutedForeground }]}>Tap to order replacement parts</Text>
+                <Text style={[styles.filterSub, { color: colors.mutedForeground }]}>
+                  {filterAdjusted ? 'Adjusted for your water quality · Tap to order' : 'Tap to order replacement parts'}
+                </Text>
               </>
             ) : (
               <>

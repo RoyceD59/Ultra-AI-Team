@@ -8,7 +8,33 @@ import * as Haptics from 'expo-haptics';
 import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 
 const CONTACT_TIMES = ['Morning (8am–12pm)', 'Afternoon (12pm–5pm)', 'Evening (5pm–8pm)', 'Any time'];
-const PRODUCT_MODELS = ['UCF-500 RO System', 'UCF-200 UF System', 'UCF-UV100 UV Purifier', 'UCF-WH1000 Whole-House', 'Other'];
+
+/**
+ * Real 2026 Ultra Clear product catalogue, grouped by segment.
+ * "Other" is kept as the catch-all final option.
+ */
+const PRODUCT_SEGMENTS: { segment: string; models: string[] }[] = [
+  {
+    segment: 'Bottles & Portable',
+    models: ['Hydra Flux', 'Truva Go', 'Viva Drop', 'Flex', 'Timbo', 'Gym Buddy', 'Survivor Straw', 'Breeze', 'EcoSmart Elite'],
+  },
+  {
+    segment: 'Home Filters',
+    models: ['Sweet Home', 'Counter Reverse Osmosis', 'Electric Pitcher', 'RO Home System'],
+  },
+  {
+    segment: 'Shower & Skin',
+    models: ["J'adore", 'Channel', 'Derma Care', 'Pure Drop', 'Derma Flux'],
+  },
+  {
+    segment: 'Accessories',
+    models: ['Bottle Filter Cartridge', 'Faucet Filter Cartridge', 'Shower Filter Cartridge', 'Derma Flux Cartridge', 'Survivor Straw Cartridge', 'Filter Shell', 'Bottle Carry Sleeve'],
+  },
+  {
+    segment: 'Solutions',
+    models: ['Aqua Stream 1200', 'Water ATMs'],
+  },
+];
 
 export default function NewTicketScreen() {
   const colors = useColors();
@@ -44,16 +70,28 @@ export default function NewTicketScreen() {
       contentContainerStyle={{ padding: 16, gap: 20, paddingBottom: Platform.OS === 'web' ? 34 : 40 }}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Product model */}
+      {/* Product model — grouped by segment */}
       <View style={styles.section}>
         <Text style={[styles.label, { color: colors.text }]}>Product Model *</Text>
+        {PRODUCT_SEGMENTS.map(seg => (
+          <View key={seg.segment} style={styles.segmentBlock}>
+            <Text style={[styles.segmentLabel, { color: colors.mutedForeground }]}>{seg.segment}</Text>
+            <View style={styles.chips}>
+              {seg.models.map(m => (
+                <TouchableOpacity key={m} onPress={() => setProductModel(m)} activeOpacity={0.8}
+                  style={[styles.chip, { backgroundColor: productModel === m ? colors.primary : colors.surface, borderColor: productModel === m ? colors.primary : colors.border }]}>
+                  <Text style={{ fontSize: 12, color: productModel === m ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>{m}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        ))}
+        {/* Other — catch-all */}
         <View style={styles.chips}>
-          {PRODUCT_MODELS.map(m => (
-            <TouchableOpacity key={m} onPress={() => setProductModel(m)} activeOpacity={0.8}
-              style={[styles.chip, { backgroundColor: productModel === m ? colors.primary : colors.surface, borderColor: productModel === m ? colors.primary : colors.border }]}>
-              <Text style={{ fontSize: 13, color: productModel === m ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>{m}</Text>
-            </TouchableOpacity>
-          ))}
+          <TouchableOpacity onPress={() => setProductModel('Other')} activeOpacity={0.8}
+            style={[styles.chip, { backgroundColor: productModel === 'Other' ? colors.primary : colors.surface, borderColor: productModel === 'Other' ? colors.primary : colors.border }]}>
+            <Text style={{ fontSize: 12, color: productModel === 'Other' ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>Other</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -115,8 +153,10 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   section: { gap: 10 },
   label: { fontSize: 15, fontWeight: '600' as const },
+  segmentBlock: { gap: 6 },
+  segmentLabel: { fontSize: 11, fontWeight: '700' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
   textarea: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 14, lineHeight: 21, minHeight: 120, textAlignVertical: 'top' },
   hint: { fontSize: 12, lineHeight: 18 },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },

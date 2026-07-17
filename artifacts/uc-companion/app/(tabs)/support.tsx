@@ -8,14 +8,16 @@ import { useApi } from '@/hooks/useApi';
 import TicketCard from '@/components/TicketCard';
 
 const GUIDES = [
-  { id: '1', title: 'UCF-500 Installation Guide', product: 'UCF-500 RO System', icon: 'document-text-outline' as const, time: '10 min read' },
-  { id: '2', title: 'How to Replace RO Filters', product: 'UCF-500 RO System', icon: 'refresh-outline' as const, time: '5 min read' },
-  { id: '3', title: 'UCF-200 Installation Guide', product: 'UCF-200 UF System', icon: 'document-text-outline' as const, time: '8 min read' },
-  { id: '4', title: 'Troubleshooting: Low Flow Rate', product: 'All RO Systems', icon: 'warning-outline' as const, time: '3 min read' },
-  { id: '5', title: 'UV Lamp Replacement', product: 'UCF-UV100', icon: 'bulb-outline' as const, time: '4 min read' },
-  { id: '6', title: 'Annual Maintenance Checklist', product: 'All Systems', icon: 'checkbox-outline' as const, time: '7 min read' },
-  { id: '7', title: 'How to Test Water Quality', product: 'All Systems', icon: 'flask-outline' as const, time: '5 min read' },
-  { id: '8', title: 'Whole-House System Setup', product: 'UCF-WH1000', icon: 'home-outline' as const, time: '12 min read' },
+  { id: '1',  title: 'Getting started with your filter bottle', product: 'Hydra Flux · Truva Go · Viva Drop', icon: 'document-text-outline' as const, time: '5 min read' },
+  { id: '2',  title: 'How to replace your bottle filter cartridge', product: 'All Bottle Filters', icon: 'refresh-outline' as const, time: '3 min read' },
+  { id: '3',  title: 'Sweet Home Faucet Filter — installation guide', product: 'Sweet Home', icon: 'home-outline' as const, time: '5 min read' },
+  { id: '4',  title: 'Shower filter installation & cartridge swap', product: "J'adore · Derma Care · Pure Drop", icon: 'sparkles-outline' as const, time: '4 min read' },
+  { id: '5',  title: 'Survivor Straw — field use & cleaning guide', product: 'Survivor Straw', icon: 'funnel-outline' as const, time: '4 min read' },
+  { id: '6',  title: 'Counter Reverse Osmosis — setup & first use', product: 'Counter Reverse Osmosis', icon: 'layers-outline' as const, time: '8 min read' },
+  { id: '7',  title: 'Troubleshooting: Slow flow or unusual taste', product: 'All Filters', icon: 'warning-outline' as const, time: '3 min read' },
+  { id: '8',  title: 'Annual filter maintenance checklist', product: 'All Products', icon: 'checkbox-outline' as const, time: '6 min read' },
+  { id: '9',  title: 'How to test your water quality at home', product: 'All Products', icon: 'flask-outline' as const, time: '5 min read' },
+  { id: '10', title: 'EcoSmart Elite — solar charging & pump care', product: 'EcoSmart Elite', icon: 'flash-outline' as const, time: '6 min read' },
 ];
 
 const TABS = ['Guides', 'My Tickets', 'Water Test'];

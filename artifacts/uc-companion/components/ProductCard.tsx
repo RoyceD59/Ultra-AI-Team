@@ -124,8 +124,8 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
               <Text style={[styles.enquireLabel, { color: colors.mutedForeground }]}>Pricing on request</Text>
               <TouchableOpacity onPress={handleEnquire} activeOpacity={0.8}
                 style={[styles.cartBtn, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
-                <Ionicons name="chatbubble-ellipses-outline" size={14} color={colors.primary} />
-                <Text style={[styles.cartBtnText, { color: colors.primary }]}>Get Pricing</Text>
+                <Ionicons name="mail-outline" size={14} color={colors.primary} />
+                <Text style={[styles.cartBtnText, { color: colors.primary }]}>Contact Us</Text>
               </TouchableOpacity>
             </>
           : <>
