@@ -356,7 +356,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Genuine replacement filter cartridge for the Ultra Clear Survivor Straw. Restores full SGS-certified filtration performance. Compact, lightweight, and easy to swap in the field. Replace when flow slows — estimated ~6 months (exact rating to be confirmed).",
     shortDescription: "Genuine replacement cartridge for Survivor Straw",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Straw+Cartridge", alt: "Survivor Straw Cartridge" }],
+    images: [{ src: "/api/uc/product-images/survivor-straw-filter-cartridge.jpg", alt: "Survivor Straw Cartridge" }],
     stockStatus: "instock", stockQuantity: 100,
     tags: [{ name: "replacement" }],
   },
