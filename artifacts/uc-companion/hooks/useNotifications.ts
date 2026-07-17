@@ -31,12 +31,89 @@ const PUSH_TOKEN_KEY       = 'uc_push_token';
 const FILTER_ACTIVATION_KEY = 'uc_filter_activation';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+export type FlowRate    = 'good' | 'slow' | 'very_slow' | 'barely';
+export type Taste       = 'normal' | 'slight' | 'strong';
+export type WaterSource = 'mains' | 'borehole' | 'surface' | 'mixed';
+export type PerfRecommendation = 'good' | 'clean' | 'replace';
+
+export interface PerformanceCheckIn {
+  date:           string;               // ISO timestamp
+  flowRate:       FlowRate;
+  taste:          Taste;
+  waterSource:    WaterSource;
+  recommendation: PerfRecommendation;
+}
+
 export interface FilterActivation {
-  activatedAt:  string;   // ISO date — when the filter was installed / activated
-  productId:    number;
-  productName:  string;
-  lifespanDays: number;   // total rated lifespan for this product
-  notifIds:     string[]; // IDs of all scheduled local notifications for this cycle
+  activatedAt:    string;               // ISO date — when the filter was installed / activated
+  productId:      number;
+  productName:    string;
+  lifespanDays:   number;               // total rated lifespan for this product
+  notifIds:       string[];             // IDs of all scheduled local notifications for this cycle
+  // Performance tracking (all optional so old stored records still parse)
+  cleanCount?:    number;               // how many times user has cleaned this filter
+  lastCleanedAt?: string;               // ISO date of most recent clean
+  lastWaterSource?: WaterSource;        // water source from most recent check-in
+  lastCheckIn?:   PerformanceCheckIn;   // most recent performance check-in
+  checkIns?:      PerformanceCheckIn[]; // full history (newest first)
+}
+
+/**
+ * Compute the effective lifespan (in days) based on water quality and clean history.
+ * The rated lifespan assumes reasonable mains water. Poor sources shorten real life.
+ */
+export function effectiveLifespanDays(activation: FilterActivation): number {
+  const { lifespanDays, cleanCount = 0, lastWaterSource } = activation;
+  let m = 1.0;
+  if (lastWaterSource === 'surface')   m *= 0.55;
+  else if (lastWaterSource === 'borehole') m *= 0.70;
+  else if (lastWaterSource === 'mixed')    m *= 0.82;
+  if (cleanCount >= 2) m *= 0.65;
+  else if (cleanCount === 1) m *= 0.80;
+  return Math.max(Math.ceil(lifespanDays * m), 21); // floor at 21 days
+}
+
+/**
+ * Score-based recommendation engine.
+ * Higher score = worse filter condition.
+ */
+export function computeRecommendation(
+  flow: FlowRate,
+  taste: Taste,
+  source: WaterSource,
+  cleanCount: number,
+  elapsedDays: number,
+  lifespanDays: number,
+): PerfRecommendation {
+  let score = 0;
+
+  // Flow rate
+  if (flow === 'barely')    score += 5;
+  else if (flow === 'very_slow') score += 3;
+  else if (flow === 'slow') score += 1;
+
+  // Taste / smell
+  if (taste === 'strong')  score += 3;
+  else if (taste === 'slight') score += 1;
+
+  // Water source harshness
+  if (source === 'surface')   score += 3;
+  else if (source === 'borehole') score += 1;
+  else if (source === 'mixed')    score += 1;
+
+  // Clean history — already cleaned means filter is on borrowed time
+  if (cleanCount >= 2) score += 4;
+  else if (cleanCount === 1) score += 2;
+
+  // How far through rated lifespan
+  const pct = elapsedDays / lifespanDays;
+  if (pct > 0.85) score += 3;
+  else if (pct > 0.65) score += 1;
+
+  if (score >= 7) return 'replace';
+  if (score >= 3) return 'clean';
+  return 'good';
 }
 
 // ── Products with rated lifespans ────────────────────────────────────────────
@@ -275,4 +352,120 @@ export async function clearFilterActivation(): Promise<void> {
   await cancelAllFilterNotifications();
   await AsyncStorage.removeItem(FILTER_ACTIVATION_KEY);
   await AsyncStorage.removeItem('uc_filter_last_changed');
+}
+
+// ── Performance check-in ──────────────────────────────────────────────────────
+
+/**
+ * Persist a completed performance check-in.
+ * If the recommendation is 'replace', we reschedule the replacement
+ * notifications to fire sooner based on the effective (adjusted) lifespan.
+ */
+export async function recordPerformanceCheckIn(
+  checkIn: PerformanceCheckIn
+): Promise<FilterActivation | null> {
+  try {
+    const existing = await getFilterActivation();
+    if (!existing) return null;
+
+    const history = [checkIn, ...(existing.checkIns ?? [])].slice(0, 20); // keep last 20
+
+    const updated: FilterActivation = {
+      ...existing,
+      lastWaterSource: checkIn.waterSource,
+      lastCheckIn:     checkIn,
+      checkIns:        history,
+    };
+
+    // If we need to replace sooner, cancel old notifs and reschedule with adjusted lifespan
+    if (checkIn.recommendation === 'replace' || checkIn.recommendation === 'clean') {
+      const effDays    = effectiveLifespanDays(updated);
+      const activation = updated.activatedAt;
+      const activationDate = new Date(activation);
+      const now        = Date.now();
+      const elapsed    = Math.floor((now - activationDate.getTime()) / 86_400_000);
+
+      if (Platform.OS !== 'web' && effDays < existing.lifespanDays) {
+        // Cancel old scheduled notifications
+        await Promise.all((existing.notifIds ?? []).map(id =>
+          Notifications.cancelScheduledNotificationAsync(id).catch(() => {})
+        ));
+
+        const status = await getNotificationPermissionStatus();
+        const newIds: string[] = [];
+
+        if (status === 'granted') {
+          await ensureAndroidChannel();
+
+          async function scheduleAdjusted(
+            targetDate: Date,
+            content: { title: string; body: string; data?: Record<string, unknown> }
+          ): Promise<void> {
+            const secondsFromNow = Math.floor((targetDate.getTime() - now) / 1000);
+            if (secondsFromNow < 30) return;
+            try {
+              const id = await Notifications.scheduleNotificationAsync({
+                content: { ...content, sound: false },
+                trigger: { seconds: secondsFromNow } as unknown as null,
+              });
+              newIds.push(id);
+            } catch { /* non-critical */ }
+          }
+
+          const offset30 = Math.max(elapsed + 1, effDays - 30);
+          if (offset30 > elapsed) {
+            await scheduleAdjusted(
+              new Date(activationDate.getTime() + offset30 * 86_400_000),
+              {
+                title: `📅 Time to order your replacement — water quality alert`,
+                body:  `Your ${existing.productName} is working harder than usual due to your water source. Order a replacement now.`,
+                data:  { screen: 'products', type: 'discount_30_adjusted' },
+              }
+            );
+          }
+
+          const offset15 = Math.max(offset30 + 1, effDays - 10);
+          if (offset15 > elapsed) {
+            await scheduleAdjusted(
+              new Date(activationDate.getTime() + offset15 * 86_400_000),
+              {
+                title: `🚨 Replace your filter soon — performance alert`,
+                body:  `Based on your water source and check-in, your ${existing.productName} needs replacing. Don't risk unfiltered water.`,
+                data:  { screen: 'products', type: 'replace_urgent_adjusted' },
+              }
+            );
+          }
+        }
+
+        updated.notifIds = newIds;
+      }
+    }
+
+    await AsyncStorage.setItem(FILTER_ACTIVATION_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record that the user cleaned their filter.
+ * Increments cleanCount, stamps lastCleanedAt, persists, and returns the updated record.
+ */
+export async function recordFilterClean(): Promise<FilterActivation | null> {
+  try {
+    const existing = await getFilterActivation();
+    if (!existing) return null;
+
+    const updated: FilterActivation = {
+      ...existing,
+      cleanCount:    (existing.cleanCount ?? 0) + 1,
+      lastCleanedAt: new Date().toISOString(),
+    };
+
+    await AsyncStorage.setItem(FILTER_ACTIVATION_KEY, JSON.stringify(updated));
+    return updated;
+  } catch {
+    return null;
+  }
 }

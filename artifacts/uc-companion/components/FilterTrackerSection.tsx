@@ -5,7 +5,7 @@
  *
  *  • Not registered → prompt card with "Register Filter" button
  *  • Registered      → product name, lifespan progress bar, days remaining,
- *                       "Filter Replaced" button
+ *                       performance check-in badge, "Check Performance" + "Replace" buttons
  *
  * Also owns the full registration modal:
  *   Step 1 — pick the product
@@ -20,6 +20,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import {
   FILTER_PRODUCTS,
   FilterActivation,
@@ -27,7 +28,10 @@ import {
   clearFilterActivation,
   getNotificationPermissionStatus,
   requestNotificationPermission,
+  effectiveLifespanDays,
+  type PerfRecommendation,
 } from '@/hooks/useNotifications';
+import PerformanceCheckInModal from '@/components/PerformanceCheckInModal';
 
 // ── Day-offset options ────────────────────────────────────────────────────────
 const DAY_OFFSETS = [
@@ -45,30 +49,50 @@ interface Props {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function daysRemaining(activation: FilterActivation): number {
+function daysRemainingRated(activation: FilterActivation): number {
   const elapsed = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
   return activation.lifespanDays - elapsed;
 }
 
+function daysRemainingEffective(activation: FilterActivation): number {
+  const elapsed  = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
+  return effectiveLifespanDays(activation) - elapsed;
+}
+
 function progressPercent(activation: FilterActivation): number {
-  const elapsed = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
-  return Math.min(100, Math.max(0, Math.round((elapsed / activation.lifespanDays) * 100)));
+  const elapsed   = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
+  const lifespan  = effectiveLifespanDays(activation);
+  return Math.min(100, Math.max(0, Math.round((elapsed / lifespan) * 100)));
 }
 
 function statusColor(daysLeft: number, primary: string, warning: string, destructive: string): string {
   if (daysLeft <= 0)  return destructive;
-  if (daysLeft <= 30) return warning;
+  if (daysLeft <= 21) return destructive;
+  if (daysLeft <= 45) return warning;
   return primary;
 }
+
+const PERF_BADGE: Record<PerfRecommendation, { label: string; color: string; icon: string }> = {
+  good:    { label: 'Performing well',    color: '#22C55E', icon: 'checkmark-circle' },
+  clean:   { label: 'Clean recommended',  color: '#F59E0B', icon: 'construct'        },
+  replace: { label: 'Replace now',        color: '#EF4444', icon: 'alert-circle'     },
+};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function FilterTrackerSection({ activation, onActivationChange }: Props) {
   const colors = useColors();
-  const [showModal, setShowModal] = useState(false);
+  const router = useRouter();
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showPerfModal,     setShowPerfModal]     = useState(false);
 
-  function openModal() {
+  function openRegisterModal() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setShowModal(true);
+    setShowRegisterModal(true);
+  }
+
+  function openPerfModal() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowPerfModal(true);
   }
 
   async function handleReset() {
@@ -77,11 +101,20 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
     onActivationChange(null);
   }
 
-  const daysLeft = activation ? daysRemaining(activation) : null;
+  const effDaysLeft  = activation ? daysRemainingEffective(activation) : null;
+  const ratedDaysLeft = activation ? daysRemainingRated(activation) : null;
+  const showEffWarning = activation &&
+    effDaysLeft !== null && ratedDaysLeft !== null &&
+    effDaysLeft < ratedDaysLeft - 5; // effective lifespan is meaningfully shorter
+
   const pct      = activation ? progressPercent(activation) : 0;
+  const daysLeft = effDaysLeft; // progress bar and main status use effective
   const barColor = daysLeft !== null
     ? statusColor(daysLeft, colors.primary, '#F59E0B', '#EF4444')
     : colors.primary;
+
+  const lastRec  = activation?.lastCheckIn?.recommendation as PerfRecommendation | undefined;
+  const perfBadge = lastRec ? PERF_BADGE[lastRec] : null;
 
   return (
     <>
@@ -106,7 +139,7 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
                       : 'Filter replacement overdue'}
                   </Text>
                 </View>
-                <TouchableOpacity onPress={openModal} style={[styles.replaceBtn, { borderColor: colors.primary }]}>
+                <TouchableOpacity onPress={openRegisterModal} style={[styles.replaceBtn, { borderColor: colors.primary }]}>
                   <Text style={[styles.replaceBtnTxt, { color: colors.primary }]}>Replace</Text>
                 </TouchableOpacity>
               </View>
@@ -117,17 +150,61 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
               </View>
               <View style={styles.progressLabels}>
                 <Text style={[styles.progressLabel, { color: colors.mutedForeground }]}>Installed</Text>
-                <Text style={[styles.progressLabel, { color: colors.mutedForeground }]}>
-                  {activation.lifespanDays}d rated life
+                <Text style={[styles.progressLabel, { color: showEffWarning ? '#F59E0B' : colors.mutedForeground }]}>
+                  {showEffWarning
+                    ? `~${effDaysLeft! + (daysLeft! < 0 ? 0 : 0)}d eff. / ${activation!.lifespanDays}d rated`
+                    : `${activation!.lifespanDays}d rated life`}
                 </Text>
               </View>
+
+              {/* Effective lifespan warning banner */}
+              {showEffWarning && (
+                <View style={[styles.effWarning, { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' }]}>
+                  <Ionicons name="information-circle-outline" size={14} color="#D97706" />
+                  <Text style={[styles.effWarningText, { color: '#92400E' }]}>
+                    {activation!.lastWaterSource === 'surface'
+                      ? 'Surface water detected — rated lifespan may be up to 45% shorter'
+                      : activation!.lastWaterSource === 'borehole'
+                      ? 'Borehole water detected — rated lifespan may be up to 30% shorter'
+                      : `After ${activation!.cleanCount} clean${(activation!.cleanCount ?? 0) > 1 ? 's' : ''}, effective lifespan is reduced`}
+                  </Text>
+                </View>
+              )}
+
+              {/* Last performance check-in badge */}
+              {perfBadge && (
+                <TouchableOpacity
+                  onPress={openPerfModal}
+                  activeOpacity={0.8}
+                  style={[styles.perfBadge, { backgroundColor: perfBadge.color + '12', borderColor: perfBadge.color + '30' }]}>
+                  <Ionicons name={perfBadge.icon as never} size={14} color={perfBadge.color} />
+                  <Text style={[styles.perfBadgeText, { color: perfBadge.color }]}>
+                    Last check: {perfBadge.label}
+                  </Text>
+                  <Text style={[styles.perfBadgeUpdate, { color: perfBadge.color + 'AA' }]}>Update →</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Check performance button (when no check-in yet) */}
+              {!perfBadge && (
+                <TouchableOpacity
+                  onPress={openPerfModal}
+                  activeOpacity={0.8}
+                  style={[styles.checkPerfBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Ionicons name="pulse-outline" size={15} color={colors.primary} />
+                  <Text style={[styles.checkPerfBtnText, { color: colors.primary }]}>
+                    Check filter performance
+                  </Text>
+                  <Ionicons name="chevron-forward" size={13} color={colors.primary} />
+                </TouchableOpacity>
+              )}
 
               {/* Divider + notification summary */}
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
               <View style={styles.row}>
                 <Ionicons name="notifications-outline" size={14} color={colors.mutedForeground} />
                 <Text style={[styles.notifNote, { color: colors.mutedForeground }]}>
-                  {activation.notifIds.length > 0
+                  {(activation.notifIds?.length ?? 0) > 0
                     ? `${activation.notifIds.length} reminders scheduled`
                     : 'Enable notifications to get reminders'}
                 </Text>
@@ -135,7 +212,7 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
             </>
           ) : (
             /* Not yet registered */
-            <TouchableOpacity onPress={openModal} style={styles.registerRow} activeOpacity={0.8}>
+            <TouchableOpacity onPress={openRegisterModal} style={styles.registerRow} activeOpacity={0.8}>
               <View style={[styles.iconWrap, { backgroundColor: colors.primaryLight }]}>
                 <Ionicons name="water-outline" size={20} color={colors.primary} />
               </View>
@@ -153,11 +230,22 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
 
       {/* ── Registration / Replace Modal ─────────────────────────────────── */}
       <RegisterModal
-        visible={showModal}
+        visible={showRegisterModal}
         existingActivation={activation}
-        onClose={() => setShowModal(false)}
-        onSave={a => { onActivationChange(a); setShowModal(false); }}
+        onClose={() => setShowRegisterModal(false)}
+        onSave={a => { onActivationChange(a); setShowRegisterModal(false); }}
       />
+
+      {/* ── Performance Check-In Modal ───────────────────────────────────── */}
+      {activation && (
+        <PerformanceCheckInModal
+          visible={showPerfModal}
+          activation={activation}
+          onClose={() => setShowPerfModal(false)}
+          onUpdated={a => { onActivationChange(a); }}
+          onOrderReplacement={() => router.push('/(tabs)/products' as never)}
+        />
+      )}
     </>
   );
 }
@@ -336,6 +424,15 @@ const styles = StyleSheet.create({
   divider:         { height: 1 },
   notifNote:       { fontSize: 12, marginLeft: 4 },
   registerRow:     { flexDirection: 'row', alignItems: 'center', gap: 12 },
+
+  // Performance badge / check button
+  perfBadge:       { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  perfBadgeText:   { flex: 1, fontSize: 12, fontWeight: '600' as const },
+  perfBadgeUpdate: { fontSize: 11, fontWeight: '500' as const },
+  checkPerfBtn:    { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 7, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  checkPerfBtnText:{ flex: 1, fontSize: 12, fontWeight: '600' as const },
+  effWarning:      { flexDirection: 'row' as const, alignItems: 'flex-start' as const, gap: 6, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  effWarningText:  { flex: 1, fontSize: 11, lineHeight: 16 },
 
   // Modal
   overlay:         { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
