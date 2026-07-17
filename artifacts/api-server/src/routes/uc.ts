@@ -124,10 +124,9 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   {
     id: 7, name: "Survivor Straw", sku: "UC-STR-SVV-007",
     price: "1299", regularPrice: "1299", salePrice: "",
-    // Catalogue does not confirm this filter's lifespan — conservative 180-day estimate.
-    lifespanDays: 180,
+    lifespanDays: 120,
     tagline: "Drink safe from any source.",
-    description: "Portable emergency filter straw. SGS-certified filtration — drink directly from streams, taps, or any water source. Lightweight and compact. Filter life: estimated ~6 months (exact rating to be confirmed).",
+    description: "Portable emergency filter straw. SGS-certified filtration — drink directly from streams, taps, or any water source. Lightweight and compact. Filter: 400L or 4 months — whichever comes first.",
     shortDescription: "Portable certified emergency filter straw",
     categories: [CAT_BOTTLES],
     images: [{ src: "/api/uc/product-images/survivor-straw-filter.jpg", alt: "Survivor Straw" }],
@@ -149,10 +148,9 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   {
     id: 9, name: "EcoSmart Elite", sku: "UC-ESE-ELT-009",
     price: "9799", regularPrice: "9799", salePrice: "",
-    // Catalogue does not confirm this filter's lifespan — conservative 180-day estimate.
-    lifespanDays: 180,
+    lifespanDays: 90,
     tagline: "Solar. Electric. Always clean.",
-    description: "Advanced portable filter with solar charging, electric pump, and built-in power bank. Multi-stage filtration: Nylon Mesh, UF Membrane 0.01µm, Ahlstrom Disruptor®, Carbon Block. Filter life: estimated ~6 months (exact rating to be confirmed).",
+    description: "Advanced portable filter with solar charging, electric pump, and built-in power bank. Multi-stage filtration: Nylon Mesh, UF Membrane 0.01µm, Ahlstrom Disruptor®, Carbon Block. Filter: 400L or 3 months — whichever comes first.",
     shortDescription: "Solar-powered certified portable filter with power bank",
     categories: [CAT_BOTTLES],
     images: [{ src: "/api/uc/product-images/ecosmart-elite-field-purifier.jpg", alt: "EcoSmart Elite" }],
@@ -351,10 +349,10 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   {
     id: 26, name: "Survivor Straw Cartridge", sku: "UC-BOG-FCS-017",
     price: "499", regularPrice: "499", salePrice: "",
-    // Matches Survivor Straw: lifespan unconfirmed — conservative 180-day estimate.
-    lifespanDays: 180,
+    // Matches Survivor Straw: 400L or 4 months.
+    lifespanDays: 120,
     tagline: "Renew the straw. Restore the protection.",
-    description: "Genuine replacement filter cartridge for the Ultra Clear Survivor Straw. Restores full SGS-certified filtration performance. Compact, lightweight, and easy to swap in the field. Replace when flow slows — estimated ~6 months (exact rating to be confirmed).",
+    description: "Genuine replacement filter cartridge for the Ultra Clear Survivor Straw. Restores full SGS-certified filtration performance. Compact, lightweight, and easy to swap in the field. Replace every 400L or 4 months — whichever comes first.",
     shortDescription: "Genuine replacement cartridge for Survivor Straw",
     categories: [CAT_ACCESS],
     images: [{ src: "/api/uc/product-images/survivor-straw-filter-cartridge.jpg", alt: "Survivor Straw Cartridge" }],
