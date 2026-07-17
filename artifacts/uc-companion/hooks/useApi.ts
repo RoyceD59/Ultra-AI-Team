@@ -34,6 +34,8 @@ export interface UCProduct {
   stockQuantity: number | null;
   tags: { name: string }[];
   enquiryOnly?: boolean;
+  /** Rated filter lifespan in days; 0 or absent = not a trackable filter. */
+  lifespanDays?: number;
   /** Team-uploaded product video (relative API path), shown in the gallery. */
   videoUrl?: string | null;
 }

@@ -460,10 +460,12 @@ async function wcFetchOne(
   }
 }
 
-function normalizeProduct(p: Record<string, unknown>): Record<string, unknown> {
+export function normalizeProduct(p: Record<string, unknown>): Record<string, unknown> {
   // lifespanDays: present on mock products; for WooCommerce products we check
-  // meta_data for a "filter_lifespan_days" key, falling back to 365.
-  let lifespanDays: number = typeof p["lifespanDays"] === "number" ? p["lifespanDays"] : 365;
+  // meta_data for a "filter_lifespan_days" key. 0 = not a trackable filter —
+  // never guess a lifespan for unknown products (the mobile filter tracker
+  // treats lifespanDays > 0 as "trackable" and schedules reminders from it).
+  let lifespanDays: number = typeof p["lifespanDays"] === "number" ? p["lifespanDays"] : 0;
   if (Array.isArray(p["meta_data"])) {
     const meta = (p["meta_data"] as Array<{ key: string; value: unknown }>)
       .find(m => m.key === "filter_lifespan_days");

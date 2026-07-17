@@ -139,35 +139,9 @@ export function computeRecommendation(
 }
 
 // ── Products with rated lifespans ────────────────────────────────────────────
-// Real Ultra Clear 2026 catalogue — only products where the user tracks a
-// filter lifecycle are listed here. IDs match the API server MOCK_PRODUCTS.
-// Kept client-side so the filter tracker works fully offline.
-export const FILTER_PRODUCTS: Array<{
-  id: number; name: string; lifespanDays: number; icon: string;
-}> = [
-  // Segment 01 · Bottles & Portable (filter: 150L or 3 months = 90 days)
-  { id: 1,  name: 'Hydra Flux',              lifespanDays:  90, icon: 'water-outline'      },
-  { id: 2,  name: 'Truva Go',                lifespanDays:  90, icon: 'water-outline'      },
-  { id: 3,  name: 'Viva Drop',               lifespanDays:  90, icon: 'water-outline'      },
-  { id: 4,  name: 'Flex',                    lifespanDays:  90, icon: 'water-outline'      },
-  { id: 5,  name: 'Timbo',                   lifespanDays:  90, icon: 'water-outline'      },
-  { id: 6,  name: 'Gym Buddy',               lifespanDays:  90, icon: 'water-outline'      },
-  // Survivor Straw & EcoSmart Elite lifespans are unconfirmed in the catalogue
-  // — conservative 180-day estimates (keep in sync with API MOCK_PRODUCTS).
-  { id: 7,  name: 'Survivor Straw',          lifespanDays: 180, icon: 'funnel-outline'     },
-  { id: 8,  name: 'Breeze',                  lifespanDays:  90, icon: 'water-outline'      },
-  { id: 9,  name: 'EcoSmart Elite',          lifespanDays: 180, icon: 'flash-outline'      },
-  // Segment 02 · Home Water Filters
-  { id: 11, name: 'Sweet Home',              lifespanDays: 120, icon: 'home-outline'       },
-  { id: 12, name: 'Counter Reverse Osmosis', lifespanDays: 180, icon: 'layers-outline'     },
-  { id: 13, name: 'Electric Pitcher',        lifespanDays:  90, icon: 'cafe-outline'       },
-  // Segment 03 · Shower & Skin Filters
-  { id: 15, name: "J'adore",                 lifespanDays: 150, icon: 'sparkles-outline'   },
-  { id: 16, name: 'Channel',                 lifespanDays: 135, icon: 'leaf-outline'       },
-  { id: 17, name: 'Derma Care',              lifespanDays: 150, icon: 'heart-outline'      },
-  { id: 18, name: 'Pure Drop',               lifespanDays: 150, icon: 'sparkles-outline'   },
-  { id: 19, name: 'Derma Flux',              lifespanDays: 135, icon: 'color-filter-outline'},
-];
+// The trackable-product list (names + lifespanDays) now comes from the live
+// catalogue via hooks/useFilterProducts.ts (API → AsyncStorage cache →
+// static fallback), so it can no longer drift out of sync with the API.
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 export type NotifPermStatus = 'granted' | 'denied' | 'undetermined';

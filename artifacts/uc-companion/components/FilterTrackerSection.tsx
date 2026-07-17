@@ -21,8 +21,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { useFilterProducts } from '@/hooks/useFilterProducts';
 import {
-  FILTER_PRODUCTS,
   FilterActivation,
   scheduleAllFilterNotifications,
   clearFilterActivation,
@@ -289,12 +289,13 @@ function RegisterModal({ visible, existingActivation, onClose, onSave }: ModalPr
   const [productId, setProductId]     = useState<number | null>(null);
   const [dayOffset, setDayOffset]     = useState(0);
   const [saving, setSaving]     = useState(false);
+  const { products: filterProducts, loading: productsLoading } = useFilterProducts();
 
   const reset = useCallback(() => {
     setStep(1); setProductId(null); setDayOffset(0); setSaving(false);
   }, []);
 
-  const selectedProduct = FILTER_PRODUCTS.find(p => p.id === productId);
+  const selectedProduct = filterProducts.find(p => p.id === productId);
 
   async function handleSave() {
     if (!selectedProduct) return;
@@ -352,7 +353,10 @@ function RegisterModal({ visible, existingActivation, onClose, onSave }: ModalPr
               <Text style={[styles.stepHint, { color: colors.mutedForeground }]}>
                 Select the filter you installed:
               </Text>
-              {FILTER_PRODUCTS.map(p => (
+              {productsLoading && filterProducts.length === 0 && (
+                <ActivityIndicator style={{ marginVertical: 20 }} color={colors.primary} />
+              )}
+              {filterProducts.map(p => (
                 <TouchableOpacity
                   key={p.id}
                   onPress={() => { setProductId(p.id); setStep(2); }}
