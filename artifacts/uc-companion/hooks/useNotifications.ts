@@ -40,18 +40,32 @@ export interface FilterActivation {
 }
 
 // ── Products with rated lifespans ────────────────────────────────────────────
-// Matches the server MOCK_PRODUCTS; kept here so the client can work offline.
+// Real Ultra Clear 2026 catalogue — only products where the user tracks a
+// filter lifecycle are listed here. IDs match the API server MOCK_PRODUCTS.
+// Kept client-side so the filter tracker works fully offline.
 export const FILTER_PRODUCTS: Array<{
   id: number; name: string; lifespanDays: number; icon: string;
 }> = [
-  { id: 101, name: 'UCF-500 Reverse Osmosis System',   lifespanDays: 365, icon: 'water'          },
-  { id: 102, name: 'UCF-200 Ultrafiltration System',   lifespanDays: 540, icon: 'layers-outline'  },
-  { id: 103, name: 'UCF-UV100 UV Purifier',            lifespanDays: 365, icon: 'flash-outline'   },
-  { id: 104, name: 'UCF-WH1000 Whole-House System',    lifespanDays: 365, icon: 'home-outline'    },
-  { id: 105, name: 'UCF-500 Replacement Filter Set',   lifespanDays: 365, icon: 'refresh-outline' },
-  { id: 106, name: 'UCF-200 Replacement Membrane',     lifespanDays: 548, icon: 'filter-outline'  },
-  { id: 107, name: 'Sediment Filter 10"',              lifespanDays:  90, icon: 'funnel-outline'  },
-  { id: 108, name: 'Carbon Block Filter 10"',          lifespanDays: 180, icon: 'leaf-outline'    },
+  // Segment 01 · Bottles & Portable (filter: 150L or 3 months = 90 days)
+  { id: 1,  name: 'Hydra Flux',              lifespanDays:  90, icon: 'water-outline'      },
+  { id: 2,  name: 'Truva Go',                lifespanDays:  90, icon: 'water-outline'      },
+  { id: 3,  name: 'Viva Drop',               lifespanDays:  90, icon: 'water-outline'      },
+  { id: 4,  name: 'Flex',                    lifespanDays:  90, icon: 'water-outline'      },
+  { id: 5,  name: 'Timbo',                   lifespanDays:  90, icon: 'water-outline'      },
+  { id: 6,  name: 'Gym Buddy',               lifespanDays:  90, icon: 'water-outline'      },
+  { id: 7,  name: 'Survivor Straw',          lifespanDays:  90, icon: 'funnel-outline'     },
+  { id: 8,  name: 'Breeze',                  lifespanDays:  90, icon: 'water-outline'      },
+  { id: 9,  name: 'EcoSmart Elite',          lifespanDays: 120, icon: 'flash-outline'      },
+  // Segment 02 · Home Water Filters
+  { id: 11, name: 'Sweet Home',              lifespanDays: 120, icon: 'home-outline'       },
+  { id: 12, name: 'Counter Reverse Osmosis', lifespanDays: 180, icon: 'layers-outline'     },
+  { id: 13, name: 'Electric Pitcher',        lifespanDays:  90, icon: 'cafe-outline'       },
+  // Segment 03 · Shower & Skin Filters
+  { id: 15, name: "J'adore",                 lifespanDays: 150, icon: 'sparkles-outline'   },
+  { id: 16, name: 'Channel',                 lifespanDays: 135, icon: 'leaf-outline'       },
+  { id: 17, name: 'Derma Care',              lifespanDays: 150, icon: 'heart-outline'      },
+  { id: 18, name: 'Pure Drop',               lifespanDays: 150, icon: 'sparkles-outline'   },
+  { id: 19, name: 'Derma Flux',              lifespanDays: 135, icon: 'color-filter-outline'},
 ];
 
 // ── Permission helpers ────────────────────────────────────────────────────────

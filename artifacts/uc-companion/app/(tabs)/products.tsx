@@ -8,7 +8,7 @@ import { useApi } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import FilterChip from '@/components/FilterChip';
 
-const CATEGORIES = ['All', 'RO Systems', 'Ultrafiltration', 'UV Systems', 'Whole-House', 'Replacement Filters'];
+const CATEGORIES = ['All', 'Bottles & Portable', 'Home Filters', 'Shower & Skin', 'Accessories', 'Solutions'];
 const topPad = Platform.OS === 'web' ? 67 : 0;
 
 export default function ProductsScreen() {
