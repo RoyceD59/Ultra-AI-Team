@@ -2,3 +2,4 @@
 - [Orval schema naming collision with operationId](orval-schema-naming-collision.md) — if a schema in openapi.yaml shares a name with Orval's auto-derived response/body type (e.g. `AiQueryResponse` collides with the `aiQuery` operationId response type), rename the schema to break the collision before codegen.
 - [Ultra Clear Brand Guidelines](uc-brand-guidelines.md) — official colours, typography, logo rules, and digital layout rules for all UCFilters / Ultra Clear designs.
 - [Expo web Metro stubs](expo-web-metro-stubs.md) — native-only modules that must be stubbed to empty on web to prevent crash at bundle load time.
+- [Release versioning](release-versioning.md) — Alpha/Beta/v1.0 ladder; all deferred "out of scope" items are v1.0 targets, tracked in that file.
