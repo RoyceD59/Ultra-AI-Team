@@ -12,8 +12,8 @@ const router = Router();
 const MOCK_PRODUCTS: Record<string, unknown>[] = [
   {
     id: 101, name: "UCF-500 Reverse Osmosis System", price: "45000",
-    regularPrice: "48000", salePrice: "45000",
-    description: "5-Stage RO system removes 99.9% of contaminants. Includes remineralization filter for healthy mineral balance. NSF certified membranes.",
+    regularPrice: "48000", salePrice: "45000", lifespanDays: 365,
+    description: "5-Stage RO system removes 99.9% of contaminants. Includes remineralization filter for healthy mineral balance. NSF certified membranes. Filter lifespan: 12 months.",
     shortDescription: "Premium 5-stage RO system for pure drinking water",
     categories: [{ id: 1, name: "RO Systems" }],
     images: [{ src: "https://placehold.co/400x400/0054A6/FFFFFF/png?text=UCF-500+RO", alt: "UCF-500" }],
@@ -22,8 +22,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 102, name: "UCF-200 Ultrafiltration System", price: "22000",
-    regularPrice: "22000", salePrice: "",
-    description: "Under-sink ultrafiltration system with 0.01 micron hollow fiber membrane. Retains beneficial minerals while removing bacteria and viruses.",
+    regularPrice: "22000", salePrice: "", lifespanDays: 540,
+    description: "Under-sink ultrafiltration system with 0.01 micron hollow fiber membrane. Retains beneficial minerals while removing bacteria and viruses. Filter lifespan: 18 months.",
     shortDescription: "Under-sink UF system that keeps healthy minerals",
     categories: [{ id: 2, name: "Ultrafiltration" }],
     images: [{ src: "https://placehold.co/400x400/0054A6/FFFFFF/png?text=UCF-200+UF", alt: "UCF-200" }],
@@ -32,8 +32,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 103, name: "UCF-UV100 UV Purifier", price: "15500",
-    regularPrice: "17000", salePrice: "15500",
-    description: "UV disinfection system that eliminates 99.99% of bacteria and viruses without chemicals. 12-month lamp life.",
+    regularPrice: "17000", salePrice: "15500", lifespanDays: 365,
+    description: "UV disinfection system that eliminates 99.99% of bacteria and viruses without chemicals. Filter lifespan: 12 months (lamp replacement).",
     shortDescription: "Chemical-free UV disinfection for any tap",
     categories: [{ id: 3, name: "UV Systems" }],
     images: [{ src: "https://placehold.co/400x400/0054A6/FFFFFF/png?text=UCF-UV100", alt: "UCF-UV100" }],
@@ -42,8 +42,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 104, name: "UCF-WH1000 Whole-House System", price: "68000",
-    regularPrice: "68000", salePrice: "",
-    description: "Complete whole-house water treatment with sediment, carbon, and UV stages. Protects all appliances and provides safe water at every tap.",
+    regularPrice: "68000", salePrice: "", lifespanDays: 365,
+    description: "Complete whole-house water treatment with sediment, carbon, and UV stages. Protects all appliances and provides safe water at every tap. Filter lifespan: 12 months.",
     shortDescription: "Complete whole-house water treatment solution",
     categories: [{ id: 4, name: "Whole-House" }],
     images: [{ src: "https://placehold.co/400x400/0054A6/FFFFFF/png?text=UCF-WH1000", alt: "UCF-WH1000" }],
@@ -52,8 +52,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 105, name: "UCF-500 Replacement Filter Set", price: "3800",
-    regularPrice: "4200", salePrice: "3800",
-    description: "Complete annual replacement filter set for UCF-500 RO System.",
+    regularPrice: "4200", salePrice: "3800", lifespanDays: 365,
+    description: "Complete annual replacement filter set for UCF-500 RO System. Filter lifespan: 12 months.",
     shortDescription: "Annual filter set for UCF-500 RO System",
     categories: [{ id: 5, name: "Replacement Filters" }],
     images: [{ src: "https://placehold.co/400x400/00B4D8/FFFFFF/png?text=Filter+Set", alt: "Filter Set" }],
@@ -62,8 +62,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 106, name: "UCF-200 Replacement Membrane", price: "2900",
-    regularPrice: "2900", salePrice: "",
-    description: "Genuine UCF-200 hollow fiber ultrafiltration membrane. Replace every 18-24 months.",
+    regularPrice: "2900", salePrice: "", lifespanDays: 548,
+    description: "Genuine UCF-200 hollow fiber ultrafiltration membrane. Replace every 18-24 months. Filter lifespan: 18 months.",
     shortDescription: "Genuine replacement membrane for UCF-200",
     categories: [{ id: 5, name: "Replacement Filters" }],
     images: [{ src: "https://placehold.co/400x400/00B4D8/FFFFFF/png?text=Membrane", alt: "Membrane" }],
@@ -72,8 +72,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 107, name: 'UCF-100 Sediment Filter 10"', price: "850",
-    regularPrice: "850", salePrice: "",
-    description: "5-micron spun polypropylene sediment filter. Replace every 3 months.",
+    regularPrice: "850", salePrice: "", lifespanDays: 90,
+    description: "5-micron spun polypropylene sediment filter. Replace every 3 months. Filter lifespan: 3 months.",
     shortDescription: "5-micron sediment pre-filter cartridge",
     categories: [{ id: 5, name: "Replacement Filters" }],
     images: [{ src: "https://placehold.co/400x400/00B4D8/FFFFFF/png?text=Sediment", alt: "Sediment" }],
@@ -82,8 +82,8 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
   },
   {
     id: 108, name: 'UCF Carbon Block Filter 10"', price: "1200",
-    regularPrice: "1200", salePrice: "",
-    description: "Activated carbon block filter removes chlorine, taste, odor, and VOCs. Replace every 6 months.",
+    regularPrice: "1200", salePrice: "", lifespanDays: 180,
+    description: "Activated carbon block filter removes chlorine, taste, odor, and VOCs. Replace every 6 months. Filter lifespan: 6 months.",
     shortDescription: "Activated carbon block filter cartridge",
     categories: [{ id: 5, name: "Replacement Filters" }],
     images: [{ src: "https://placehold.co/400x400/00B4D8/FFFFFF/png?text=Carbon", alt: "Carbon" }],
@@ -149,20 +149,29 @@ async function wcFetchOne(
 }
 
 function normalizeProduct(p: Record<string, unknown>): Record<string, unknown> {
+  // lifespanDays: present on mock products; for WooCommerce products we check
+  // meta_data for a "filter_lifespan_days" key, falling back to 365.
+  let lifespanDays: number = typeof p["lifespanDays"] === "number" ? p["lifespanDays"] : 365;
+  if (Array.isArray(p["meta_data"])) {
+    const meta = (p["meta_data"] as Array<{ key: string; value: unknown }>)
+      .find(m => m.key === "filter_lifespan_days");
+    if (meta && Number(meta.value) > 0) lifespanDays = Number(meta.value);
+  }
   return {
     id: p["id"],
     name: p["name"],
     price: p["price"],
-    regularPrice: p["regular_price"],
-    salePrice: p["sale_price"],
+    regularPrice: p["regular_price"] ?? p["regularPrice"],
+    salePrice: p["sale_price"] ?? p["salePrice"],
     description: p["description"],
-    shortDescription: p["short_description"],
+    shortDescription: p["short_description"] ?? p["shortDescription"],
     categories: p["categories"],
     images: p["images"],
     sku: p["sku"],
-    stockStatus: p["stock_status"],
-    stockQuantity: p["stock_quantity"],
+    stockStatus: p["stock_status"] ?? p["stockStatus"],
+    stockQuantity: p["stock_quantity"] ?? p["stockQuantity"],
     tags: p["tags"],
+    lifespanDays,
   };
 }
 

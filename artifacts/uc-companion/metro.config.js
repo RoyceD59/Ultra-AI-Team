@@ -7,8 +7,15 @@ const config = getDefaultConfig(__dirname);
 // point, but Metro still resolves the full module graph eagerly.
 const { resolver } = config;
 const upstream = resolver.resolveRequest;
+// Modules that are native-only and must be stubbed to empty on web.
+const WEB_STUBS = new Set([
+  'react-native-maps',
+  'expo-contacts',
+  'expo-contacts/legacy',
+  'expo-sms',
+]);
 resolver.resolveRequest = (ctx, moduleName, platform) => {
-  if (platform === 'web' && moduleName === 'react-native-maps') {
+  if (platform === 'web' && WEB_STUBS.has(moduleName)) {
     return { type: 'empty' };
   }
   if (upstream) return upstream(ctx, moduleName, platform);

@@ -10,7 +10,7 @@ import { useApi, type UCPromotion } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import TrustBadges from '@/components/TrustBadges';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { scheduleFilterReminder } from '@/hooks/useNotifications';
+import { getFilterActivation } from '@/hooks/useNotifications';
 
 const UC_SKY  = '#52b6dc';
 const UC_DEEP = '#005d8f';
@@ -71,14 +71,20 @@ export default function HomeScreen() {
   });
 
   useEffect(() => {
-    AsyncStorage.getItem('uc_filter_last_changed').then(v => {
-      if (v) {
-        const days = Math.floor((Date.now() - parseInt(v)) / (1000 * 60 * 60 * 24));
-        const daysLeft = 180 - days;
-        setFilterDays(daysLeft);
-        // Fire a local reminder notification if within 30 days of replacement
-        scheduleFilterReminder(daysLeft);
+    // Primary: use the structured FilterActivation record (product-specific lifespan)
+    getFilterActivation().then(activation => {
+      if (activation) {
+        const elapsed  = Math.floor((Date.now() - new Date(activation.activatedAt).getTime()) / 86_400_000);
+        setFilterDays(activation.lifespanDays - elapsed);
+        return;
       }
+      // Fallback: legacy uc_filter_last_changed key (180-day assumption)
+      AsyncStorage.getItem('uc_filter_last_changed').then(v => {
+        if (v) {
+          const elapsed  = Math.floor((Date.now() - parseInt(v)) / 86_400_000);
+          setFilterDays(180 - elapsed);
+        }
+      });
     });
   }, []);
 

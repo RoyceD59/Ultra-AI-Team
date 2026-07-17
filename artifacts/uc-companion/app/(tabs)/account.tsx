@@ -7,10 +7,13 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useApi } from '@/hooks/useApi';
 import OrderCard from '@/components/OrderCard';
+import FilterTrackerSection from '@/components/FilterTrackerSection';
 import * as Haptics from 'expo-haptics';
 import {
   getNotificationPermissionStatus,
   requestNotificationPermission,
+  getFilterActivation,
+  type FilterActivation,
 } from '@/hooks/useNotifications';
 const topPad = Platform.OS === 'web' ? 67 : 0;
 
@@ -27,7 +30,8 @@ export default function AccountScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const api = useApi();
-  const [notifStatus, setNotifStatus] = useState<string>('undetermined');
+  const [notifStatus, setNotifStatus]           = useState<string>('undetermined');
+  const [filterActivation, setFilterActivation] = useState<FilterActivation | null>(null);
 
   const refreshNotifStatus = useCallback(async () => {
     if (Platform.OS === 'web') return;
@@ -35,7 +39,10 @@ export default function AccountScreen() {
     setNotifStatus(s);
   }, []);
 
-  useEffect(() => { refreshNotifStatus(); }, [refreshNotifStatus]);
+  useEffect(() => {
+    refreshNotifStatus();
+    getFilterActivation().then(setFilterActivation);
+  }, [refreshNotifStatus]);
 
   async function enableNotifications() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -116,6 +123,16 @@ export default function AccountScreen() {
       </View>
 
       <View style={styles.body}>
+        {/* Filter tracker */}
+        <FilterTrackerSection
+          activation={filterActivation}
+          onActivationChange={a => {
+            setFilterActivation(a);
+            // Refresh permission status in case user just granted it
+            refreshNotifStatus();
+          }}
+        />
+
         {/* Recent orders */}
         {recentOrders.length > 0 && (
           <View style={styles.section}>
