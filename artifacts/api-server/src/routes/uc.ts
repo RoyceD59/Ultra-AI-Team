@@ -282,7 +282,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Curated gift and bundle sets — mix and match Ultra Clear products. Filter lifespan varies by bundle contents. Contact us to build your perfect bundle.",
     shortDescription: "Mix & match gift bundles — contact us for pricing",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Gift+Sets", alt: "Gift Sets" }],
+    images: [{ src: "/api/uc/product-images/gift-and-bundle-sets.jpg", alt: "Gift Sets" }],
     stockStatus: "instock", stockQuantity: 999,
     tags: [],
   },
@@ -1819,6 +1819,56 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
 
 // ─── Enquiries ────────────────────────────────────────────────────────────────
 
+// ─── Office notifications ─────────────────────────────────────────────────────
+
+/** Official office inbox for all customer form submissions. */
+const OFFICE_EMAIL = "sales@ucfilters.com";
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Send a plain-text form-submission email to the office inbox (sales@ucfilters.com).
+ * Prefers the Resend API when RESEND_API_KEY is set; falls back to the
+ * SendGrid/SMTP chain in lib/email when Resend is unconfigured or returns an
+ * error. Fire-and-forget — never throws. Logs only the subject/request id,
+ * never the form payload (it contains customer PII; the submission itself is
+ * already persisted in the database).
+ */
+export async function notifyOffice(subject: string, lines: string[]): Promise<void> {
+  const text = lines.join("\n");
+  const apiKey = process.env["RESEND_API_KEY"];
+  if (apiKey) {
+    try {
+      const resp = await fetch(`${process.env["RESEND_BASE_URL"] ?? "https://api.resend.com"}/emails`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          from: "Ultra Clear App <noreply@ucfilters.com>",
+          to: OFFICE_EMAIL,
+          subject,
+          text,
+        }),
+      });
+      if (resp.ok) return;
+      console.error(`[office-notify] Resend responded ${resp.status} for "${subject}" — falling back to SendGrid/SMTP`);
+    } catch (err) {
+      console.error(`[office-notify] Resend failed for "${subject}" — falling back to SendGrid/SMTP:`, err instanceof Error ? err.message : err);
+    }
+  }
+  try {
+    await sendEmail({
+      to: OFFICE_EMAIL,
+      subject,
+      text,
+      html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
+    });
+  } catch (err) {
+    console.error(`[office-notify] email failed for "${subject}":`, err instanceof Error ? err.message : err);
+  }
+}
+
 /**
  * Send a plain-text notification email to info@ucfilters.com via the Resend API.
  * No-ops when RESEND_API_KEY is absent — falls back to a console log so the
@@ -1971,6 +2021,16 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
         });
         sendEmail({ to: contact.email, ...receipt });
       }
+      // Full form copy to the office inbox
+      notifyOffice(`New Service Request ${ticket.id}: ${ticket.productModel}`, [
+        `Ticket:        ${ticket.id}`,
+        `Product:       ${ticket.productModel}`,
+        `Issue:         ${ticket.issueDescription}`,
+        `Contact time:  ${ticket.preferredContactTime}`,
+        `Customer:      ${contact ? `${contact.firstName ?? ""} ${contact.email ?? ""} ${contact.phone ?? ""}`.trim() : "(guest)"}`,
+        ...(photoList.length ? [`Photos:        ${photoList.join(", ")}`] : []),
+        ...(videoList.length ? [`Videos:        ${videoList.join(", ")}`] : []),
+      ]).catch(() => {});
     }).catch(() => {});
     res.status(201).json(ticket);
   } catch (err) {
@@ -1996,6 +2056,16 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
         });
         sendEmail({ to: contact.email, ...receipt });
       }
+      // Full form copy to the office inbox
+      notifyOffice(`New Service Request ${id}: ${productModel}`, [
+        `Ticket:        ${id}`,
+        `Product:       ${productModel}`,
+        `Issue:         ${issueDescription}`,
+        `Contact time:  ${preferredContactTime ?? "Any time"}`,
+        `Customer:      ${contact ? `${contact.firstName ?? ""} ${contact.email ?? ""} ${contact.phone ?? ""}`.trim() : "(guest)"}`,
+        ...(photoList.length ? [`Photos:        ${photoList.join(", ")}`] : []),
+        ...(videoList.length ? [`Videos:        ${videoList.join(", ")}`] : []),
+      ]).catch(() => {});
     }).catch(() => {});
     res.status(201).json(fallback);
   }
@@ -2047,6 +2117,17 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
     // SMS + email confirmation — phone submitted in form (fire-and-forget)
     const firstName = name.split(" ")[0] ?? name;
     sendSms(phone, waterTestConfirmationSms({ testId: wt.id, address, firstName }));
+    // Full form copy to the office inbox
+    notifyOffice(`New Water Test Request ${wt.id}: ${name}`, [
+      `Request:      ${wt.id}`,
+      `Name:         ${name}`,
+      `Phone:        ${phone}`,
+      `Address:      ${address}`,
+      `Water source: ${waterSource ?? "Municipal"}`,
+      `Concerns:     ${concerns || "(none given)"}`,
+      ...(photoList.length ? [`Photos:       ${photoList.join(", ")}`] : []),
+      ...(videoList.length ? [`Videos:       ${videoList.join(", ")}`] : []),
+    ]).catch(() => {});
     getUserContact(userId).then(contact => {
       if (contact?.email) {
         const receipt = buildWaterTestConfirmationEmail({
@@ -2072,6 +2153,17 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
     // SMS + email confirmation (fire-and-forget, fallback path)
     const firstName2 = name.split(" ")[0] ?? name;
     sendSms(phone, waterTestConfirmationSms({ testId: id, address, firstName: firstName2 }));
+    // Full form copy to the office inbox
+    notifyOffice(`New Water Test Request ${id}: ${name}`, [
+      `Request:      ${id}`,
+      `Name:         ${name}`,
+      `Phone:        ${phone}`,
+      `Address:      ${address}`,
+      `Water source: ${waterSource ?? "Municipal"}`,
+      `Concerns:     ${concerns || "(none given)"}`,
+      ...(photoList.length ? [`Photos:       ${photoList.join(", ")}`] : []),
+      ...(videoList.length ? [`Videos:       ${videoList.join(", ")}`] : []),
+    ]).catch(() => {});
     getUserContact(userId).then(contact => {
       if (contact?.email) {
         const receipt = buildWaterTestConfirmationEmail({

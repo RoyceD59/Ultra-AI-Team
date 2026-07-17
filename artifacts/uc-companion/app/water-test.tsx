@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
 import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 import { uploadMediaItems } from '@/lib/uploadMedia';
+import { openWhatsApp } from '@/lib/whatsapp';
 
 const WATER_SOURCES = ['Municipal/Tap', 'Borehole', 'Well', 'Rainwater', 'River/Lake', 'Tanker delivery'];
 const CONCERNS = ['Bad taste or odor', 'Discolouration', 'Hardness / scale buildup', 'Skin irritation', 'Gastrointestinal issues', 'General safety check'];
@@ -26,6 +27,7 @@ export default function WaterTestScreen() {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [whatsAppSummary, setWhatsAppSummary] = useState('');
 
   const toggleConcern = (c: string) => {
     setSelectedConcerns(prev =>
@@ -51,12 +53,22 @@ export default function WaterTestScreen() {
       // Upload to object storage first — the API stores permanent URLs,
       // not device-local file paths.
       const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
-      await api.createWaterTest({
+      const concernsText = [...selectedConcerns, extraConcerns].filter(Boolean).join(', ');
+      const wt = await api.createWaterTest({
         name, address, phone, waterSource,
-        concerns: [...selectedConcerns, extraConcerns].filter(Boolean).join(', '),
+        concerns: concernsText,
         photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
         videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
       });
+      setWhatsAppSummary([
+        'ULTRA CLEAR — WATER TEST REQUEST',
+        `Ref: ${wt.id}`,
+        `Name: ${name}`,
+        `Phone: ${phone}`,
+        `Address: ${address}`,
+        `Water source: ${waterSource}`,
+        ...(concernsText ? [`Concerns: ${concernsText}`] : []),
+      ].join('\n'));
       setSubmitted(true);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Submission failed. Please try again.');
@@ -73,6 +85,11 @@ export default function WaterTestScreen() {
         <Text style={[styles.successDesc, { color: colors.mutedForeground }]}>
           Our certified technician will contact you within 24 hours to schedule a convenient time for your free water quality test.
         </Text>
+        <TouchableOpacity onPress={() => openWhatsApp(whatsAppSummary)}
+          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+          <Ionicons name="logo-whatsapp" size={20} color="#fff" />
+          <Text style={styles.doneBtnText}>Send a copy on WhatsApp</Text>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => router.back()}
           style={[styles.doneBtn, { backgroundColor: colors.primary }]}>
           <Text style={styles.doneBtnText}>Done</Text>

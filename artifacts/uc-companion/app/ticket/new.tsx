@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
 import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 import { uploadMediaItems } from '@/lib/uploadMedia';
+import { openWhatsApp } from '@/lib/whatsapp';
 
 const CONTACT_TIMES = ['Morning (8am–12pm)', 'Afternoon (12pm–5pm)', 'Evening (5pm–8pm)', 'Any time'];
 
@@ -48,6 +49,8 @@ export default function NewTicketScreen() {
   const [contactTime, setContactTime] = useState(CONTACT_TIMES[3]!);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [whatsAppSummary, setWhatsAppSummary] = useState('');
 
   async function submit() {
     if (!productModel || !issue) {
@@ -67,18 +70,47 @@ export default function NewTicketScreen() {
       // Upload to object storage first — the team needs permanent URLs,
       // not device-local file paths.
       const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
-      await api.createTicket({
+      const ticket = await api.createTicket({
         productModel,
         issueDescription: issue,
         preferredContactTime: contactTime,
         photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
         videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
       });
-      router.push('/(tabs)/support');
-      Alert.alert('Submitted!', 'Your maintenance ticket has been received. We will contact you shortly.');
+      setWhatsAppSummary([
+        'ULTRA CLEAR — SERVICE REQUEST',
+        `Ref: ${ticket.id}`,
+        `Product: ${productModel}`,
+        `Issue: ${issue}`,
+        `Preferred contact time: ${contactTime}`,
+      ].join('\n'));
+      setSubmitted(true);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed to submit ticket. Please try again.');
     } finally { setSubmitting(false); }
+  }
+
+  if (submitted) {
+    return (
+      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 40 }]}>
+        <View style={[styles.successIcon, { backgroundColor: colors.successLight }]}>
+          <Ionicons name="checkmark-circle" size={52} color={colors.success} />
+        </View>
+        <Text style={[styles.successTitle, { color: colors.text }]}>Ticket Submitted!</Text>
+        <Text style={[styles.successDesc, { color: colors.mutedForeground }]}>
+          Your maintenance ticket has been received. Our team will contact you shortly.
+        </Text>
+        <TouchableOpacity onPress={() => openWhatsApp(whatsAppSummary)}
+          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+          <Ionicons name="logo-whatsapp" size={20} color="#fff" />
+          <Text style={styles.doneBtnText}>Send a copy on WhatsApp</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push('/(tabs)/support')}
+          style={[styles.doneBtn, { backgroundColor: colors.primary }]}>
+          <Text style={styles.doneBtnText}>Done</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -178,4 +210,9 @@ const styles = StyleSheet.create({
   hint: { fontSize: 12, lineHeight: 18 },
   submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  successIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
+  successTitle: { fontSize: 22, fontWeight: '700' as const },
+  successDesc: { fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  doneBtn: { borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, justifyContent: 'center' },
+  doneBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' as const },
 });
