@@ -4,8 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
 import { useApi } from '@/hooks/useApi';
+import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
 import MediaPicker, { MediaItem } from '@/components/MediaPicker';
+import { uploadMediaItems } from '@/lib/uploadMedia';
 
 const CONTACT_TIMES = ['Morning (8am–12pm)', 'Afternoon (12pm–5pm)', 'Evening (5pm–8pm)', 'Any time'];
 
@@ -40,6 +42,7 @@ export default function NewTicketScreen() {
   const colors = useColors();
   const router = useRouter();
   const api = useApi();
+  const { token } = useAuth();
   const [productModel, setProductModel] = useState('');
   const [issue, setIssue] = useState('');
   const [contactTime, setContactTime] = useState(CONTACT_TIMES[3]!);
@@ -51,16 +54,30 @@ export default function NewTicketScreen() {
       Alert.alert('Missing info', 'Please select a product model and describe the issue.');
       return;
     }
+    if (media.length > 0 && !token) {
+      Alert.alert(
+        'Sign in to attach media',
+        'Photos and videos can only be uploaded from an account. Sign in, or remove the attachments to continue.',
+      );
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
-      const photos = media.filter(m => m.type === 'photo').map(m => m.uri);
-      const videos = media.filter(m => m.type === 'video').map(m => m.uri);
-      await api.createTicket({ productModel, issueDescription: issue, preferredContactTime: contactTime, photos, videos });
+      // Upload to object storage first — the team needs permanent URLs,
+      // not device-local file paths.
+      const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
+      await api.createTicket({
+        productModel,
+        issueDescription: issue,
+        preferredContactTime: contactTime,
+        photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
+        videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
+      });
       router.push('/(tabs)/support');
       Alert.alert('Submitted!', 'Your maintenance ticket has been received. We will contact you shortly.');
-    } catch {
-      Alert.alert('Error', 'Failed to submit ticket. Please try again.');
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to submit ticket. Please try again.');
     } finally { setSubmitting(false); }
   }
 

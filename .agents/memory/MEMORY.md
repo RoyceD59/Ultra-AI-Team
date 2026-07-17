@@ -1,5 +1,6 @@
-- [Orval date fields vs Drizzle string-mode dates](orval-drizzle-date-mismatch.md) — generated Zod schemas coerce `format: date` to JS `Date`; Drizzle `date` columns in `{mode:"string"}` need a manual `Date -> "YYYY-MM-DD"` conversion at the DB boundary.
-- [Orval schema naming collision with operationId](orval-schema-naming-collision.md) — if a schema in openapi.yaml shares a name with Orval's auto-derived response/body type (e.g. `AiQueryResponse` collides with the `aiQuery` operationId response type), rename the schema to break the collision before codegen.
+- [Orval date fields vs Drizzle string-mode dates](orval-drizzle-date-mismatch.md) — Zod coerces `format: date` to JS Date; string-mode Drizzle date columns need manual YYYY-MM-DD conversion at the DB boundary.
+- [Orval schema naming collision with operationId](orval-schema-naming-collision.md) — rename any openapi.yaml schema whose name matches an operationId-derived response/body type before codegen.
 - [Ultra Clear Brand Guidelines](uc-brand-guidelines.md) — official colours, typography, logo rules, and digital layout rules for all UCFilters / Ultra Clear designs.
 - [Expo web Metro stubs](expo-web-metro-stubs.md) — native-only modules that must be stubbed to empty on web to prevent crash at bundle load time.
 - [Release versioning](release-versioning.md) — Alpha/Beta/v1.0 ladder; all deferred "out of scope" items are v1.0 targets, tracked in that file.
+- [UC upload/media security](uc-upload-security.md) — attach-time metadata verification is the enforcement point for presigned uploads; admin is DB-anchored; public serving limited to uploads/<uuid>.

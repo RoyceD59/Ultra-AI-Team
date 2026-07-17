@@ -1,12 +1,20 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Platform,
+  ActivityIndicator, useWindowDimensions,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { useColors } from '@/hooks/useColors';
-import { useApi } from '@/hooks/useApi';
+import { useApi, resolveMediaUrl, type UCReviewMedia } from '@/hooks/useApi';
+import { useAuth } from '@/context/AuthContext';
 import { useCart } from '@/context/CartContext';
 import TrustBadges from '@/components/TrustBadges';
+import StarRating from '@/components/StarRating';
+import ReviewCard from '@/components/ReviewCard';
+import MediaViewer from '@/components/MediaViewer';
 import * as Haptics from 'expo-haptics';
 
 function formatKES(price: string) {
@@ -14,18 +22,52 @@ function formatKES(price: string) {
   return isNaN(n) ? '—' : `KES ${n.toLocaleString('en-KE')}`;
 }
 
+type Slide =
+  | { kind: 'photo'; src: string; alt: string }
+  | { kind: 'video'; src: string };
+
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const router = useRouter();
   const api = useApi();
   const { addItem, totalItems } = useCart();
+  const { token } = useAuth();
+  const { width } = useWindowDimensions();
+
+  const pid = parseInt(id ?? '');
+  const [slideIndex, setSlideIndex] = useState(0);
+  const [viewerItem, setViewerItem] = useState<UCReviewMedia | null>(null);
 
   const { data: product, isLoading } = useQuery({
     queryKey: ['product', id],
-    queryFn: () => api.getProduct(parseInt(id!)),
+    queryFn: () => api.getProduct(pid),
     enabled: !!id,
   });
+
+  const { data: reviewData } = useQuery({
+    queryKey: ['reviews', pid],
+    queryFn: () => api.getReviews(pid),
+    enabled: !isNaN(pid),
+  });
+
+  // Admin flag (drives the "Manage media" row); only fetched when signed in.
+  const { data: profile } = useQuery({
+    queryKey: ['profile'],
+    queryFn: () => api.getProfile(),
+    enabled: !!token,
+  });
+  const isAdmin = profile?.isAdmin === true;
+
+  // Product video player — source attached once the product loads.
+  const player = useVideoPlayer(null as unknown as string, (p) => {
+    p.loop = true;
+    p.muted = true;
+  });
+  useEffect(() => {
+    if (product?.videoUrl) player.replace({ uri: resolveMediaUrl(product.videoUrl) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.videoUrl]);
 
   if (isLoading) return (
     <View style={[styles.loading, { backgroundColor: colors.background }]}>
@@ -44,19 +86,57 @@ export default function ProductDetailScreen() {
   const isOnSale = !isEnquiryOnly && product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
   const inStock = product.stockStatus === 'instock';
 
+  const slides: Slide[] = [
+    ...product.images.map((img) => ({ kind: 'photo' as const, src: resolveMediaUrl(img.src), alt: img.alt })),
+    ...(product.videoUrl ? [{ kind: 'video' as const, src: resolveMediaUrl(product.videoUrl) }] : []),
+  ];
+
+  const myReview = reviewData?.reviews.find((r) => r.mine);
+  const reviewParams = { productId: String(product.id), productName: product.name };
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
-        {/* Image */}
+        {/* Media gallery — swipe through photos, then the product video */}
         <View style={[styles.imageContainer, { backgroundColor: colors.surface }]}>
-          {product.images[0] ? (
-            <Image source={{ uri: product.images[0].src }} style={styles.image} resizeMode="contain" />
-          ) : (
+          {slides.length === 0 ? (
             <Ionicons name="water-outline" size={80} color={colors.primary} />
+          ) : (
+            <ScrollView
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(e) =>
+                setSlideIndex(Math.max(0, Math.round(e.nativeEvent.contentOffset.x / width)))
+              }
+            >
+              {slides.map((slide, i) => (
+                <View key={i} style={{ width, height: 260, alignItems: 'center', justifyContent: 'center' }}>
+                  {slide.kind === 'photo' ? (
+                    <Image source={{ uri: slide.src }} style={styles.image} resizeMode="contain" />
+                  ) : (
+                    <VideoView player={player} style={styles.video} contentFit="contain" nativeControls />
+                  )}
+                </View>
+              ))}
+            </ScrollView>
           )}
           {isOnSale && (
             <View style={[styles.saleBadge, { backgroundColor: colors.destructive }]}>
               <Text style={styles.saleBadgeText}>SALE</Text>
+            </View>
+          )}
+          {slides.length > 1 && (
+            <View style={styles.dots}>
+              {slides.map((s, i) => (
+                s.kind === 'video' ? (
+                  <Ionicons key={i} name="play-circle" size={12}
+                    color={i === slideIndex ? colors.primary : 'rgba(120,120,120,0.5)'} />
+                ) : (
+                  <View key={i} style={[styles.dot,
+                    { backgroundColor: i === slideIndex ? colors.primary : 'rgba(120,120,120,0.35)' }]} />
+                )
+              ))}
             </View>
           )}
         </View>
@@ -69,7 +149,20 @@ export default function ProductDetailScreen() {
 
           {/* Name & Price */}
           <Text style={[styles.name, { color: colors.text }]}>{product.name}</Text>
-          <Text style={[styles.sku, { color: colors.mutedForeground }]}>SKU: {product.sku}</Text>
+          <View style={styles.skuRow}>
+            <Text style={[styles.sku, { color: colors.mutedForeground }]}>SKU: {product.sku}</Text>
+            {reviewData && reviewData.count > 0 && (
+              <TouchableOpacity
+                style={styles.ratingInline}
+                onPress={() => router.push({ pathname: '/review/list', params: reviewParams })}
+              >
+                <StarRating rating={reviewData.average} size={12} />
+                <Text style={[styles.ratingInlineTxt, { color: colors.mutedForeground }]}>
+                  {reviewData.average.toFixed(1)} ({reviewData.count})
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {isEnquiryOnly
             ? <View style={[styles.enquiryBanner, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
@@ -118,6 +211,77 @@ export default function ProductDetailScreen() {
           {/* Trust Badges */}
           <Text style={[styles.sectionLabel, { color: colors.text }]}>Certifications & Trust</Text>
           <TrustBadges />
+
+          {/* Reviews */}
+          <View style={styles.reviewsHeader}>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Reviews</Text>
+            {reviewData && reviewData.count > 0 && (
+              <View style={styles.ratingInline}>
+                <StarRating rating={reviewData.average} size={13} />
+                <Text style={[styles.ratingInlineTxt, { color: colors.mutedForeground }]}>
+                  {reviewData.average.toFixed(1)} · {reviewData.count} review{reviewData.count === 1 ? '' : 's'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {reviewData && reviewData.count === 0 && (
+            <Text style={[styles.noReviews, { color: colors.mutedForeground }]}>
+              No reviews yet — be the first to share your experience.
+            </Text>
+          )}
+
+          <View style={{ gap: 10 }}>
+            {reviewData?.reviews.slice(0, 2).map((r) => (
+              <ReviewCard key={r.id} review={r} onOpenMedia={setViewerItem} />
+            ))}
+          </View>
+
+          <View style={styles.reviewBtnRow}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() =>
+                token
+                  ? router.push({ pathname: '/review/new', params: reviewParams })
+                  : router.push('/auth/login')
+              }
+              style={[styles.reviewBtn, { borderColor: colors.primary }]}
+            >
+              <Ionicons name="create-outline" size={15} color={colors.primary} />
+              <Text style={[styles.reviewBtnTxt, { color: colors.primary }]}>
+                {myReview ? 'Edit your review' : 'Write a review'}
+              </Text>
+            </TouchableOpacity>
+            {reviewData && reviewData.count > 2 && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => router.push({ pathname: '/review/list', params: reviewParams })}
+                style={[styles.reviewBtn, { borderColor: colors.border }]}
+              >
+                <Text style={[styles.reviewBtnTxt, { color: colors.text }]}>
+                  See all {reviewData.count}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Team-only: manage extra product photos & video */}
+          {isAdmin && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => router.push({ pathname: '/admin/product-media', params: reviewParams })}
+              style={[styles.adminRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
+              <Ionicons name="images-outline" size={18} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.adminTitle, { color: colors.text }]}>Manage product media</Text>
+                <Text style={[styles.adminSub, { color: colors.mutedForeground }]}>
+                  Team only — add photos or a product video
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
 
@@ -148,7 +312,7 @@ export default function ProductDetailScreen() {
               onPress={() => {
                 if (!inStock) return;
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                addItem({ id: product.id, name: product.name, price: parseFloat(displayPrice), quantity: 1, image: product.images[0]?.src ?? '', sku: product.sku });
+                addItem({ id: product.id, name: product.name, price: parseFloat(displayPrice), quantity: 1, image: resolveMediaUrl(product.images[0]?.src ?? ''), sku: product.sku });
                 router.push('/cart');
               }}
               style={[styles.addBtn, { backgroundColor: inStock ? colors.primary : colors.muted }]}>
@@ -160,6 +324,8 @@ export default function ProductDetailScreen() {
           </>
         )}
       </View>
+
+      <MediaViewer item={viewerItem} onClose={() => setViewerItem(null)} />
     </View>
   );
 }
@@ -168,12 +334,18 @@ const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   imageContainer: { height: 260, alignItems: 'center', justifyContent: 'center' },
   image: { width: '100%', height: '100%' },
+  video: { width: '92%', height: '92%' },
+  dots: { position: 'absolute', bottom: 10, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dot: { width: 7, height: 7, borderRadius: 4 },
   saleBadge: { position: 'absolute', top: 16, left: 16, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
   saleBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' as const },
   body: { padding: 20, gap: 14 },
   category: { fontSize: 12, fontWeight: '700' as const, textTransform: 'uppercase', letterSpacing: 1 },
   name: { fontSize: 22, fontWeight: '700' as const, lineHeight: 28 },
+  skuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   sku: { fontSize: 12 },
+  ratingInline: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  ratingInlineTxt: { fontSize: 12 },
   priceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   price: { fontSize: 26, fontWeight: '800' as const },
   oldPrice: { fontSize: 16, textDecorationLine: 'line-through' },
@@ -184,6 +356,14 @@ const styles = StyleSheet.create({
   sectionLabel: { fontSize: 16, fontWeight: '700' as const, marginTop: 4 },
   description: { fontSize: 14, lineHeight: 22 },
   shortDesc: { fontSize: 14, lineHeight: 22, fontStyle: 'italic' },
+  reviewsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 },
+  noReviews: { fontSize: 13, lineHeight: 18 },
+  reviewBtnRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  reviewBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  reviewBtnTxt: { fontSize: 13, fontWeight: '700' as const },
+  adminRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 12, padding: 12 },
+  adminTitle: { fontSize: 14, fontWeight: '600' as const },
+  adminSub: { fontSize: 12, marginTop: 1 },
   footer: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', gap: 12, padding: 16, paddingBottom: Platform.OS === 'web' ? 34 : 16, borderTopWidth: 1 },
   cartIcon: { width: 50, height: 50, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   badge: { position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center' },

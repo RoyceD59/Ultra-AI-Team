@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, boolean } from "drizzle-orm/pg-core";
 
 /**
  * Stores registered Ultra-Clear Companion user accounts.
@@ -12,6 +12,7 @@ export const ucUsersTable = pgTable("uc_users", {
   phone:        text("phone").notNull().default(""),
   firstName:    text("first_name").notNull(),
   lastName:     text("last_name").notNull().default(""),
+  isAdmin:      boolean("is_admin").notNull().default(false),
   createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

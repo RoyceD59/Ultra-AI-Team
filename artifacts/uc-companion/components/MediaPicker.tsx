@@ -13,6 +13,18 @@ export interface MediaItem {
   uri: string;
   type: 'photo' | 'video';
   duration?: number; // seconds
+  mimeType?: string;
+  fileName?: string;
+  fileSize?: number; // bytes
+}
+
+/** Copy upload-relevant metadata off an ImagePicker asset. */
+function assetMeta(a: ImagePicker.ImagePickerAsset): Pick<MediaItem, 'mimeType' | 'fileName' | 'fileSize'> {
+  return {
+    mimeType: a.mimeType ?? undefined,
+    fileName: a.fileName ?? undefined,
+    fileSize: a.fileSize ?? undefined,
+  };
 }
 
 interface Props {
@@ -59,7 +71,7 @@ export default function MediaPicker({ items, onChange, maxItems = 6, label }: Pr
     setSheetVisible(false);
     if (!(await reqCamera())) return;
     const r = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85 });
-    if (!r.canceled && r.assets[0]) push({ uri: r.assets[0].uri, type: 'photo' });
+    if (!r.canceled && r.assets[0]) push({ uri: r.assets[0].uri, type: 'photo', ...assetMeta(r.assets[0]) });
   }
 
   async function recordVideo() {
@@ -68,7 +80,7 @@ export default function MediaPicker({ items, onChange, maxItems = 6, label }: Pr
     const r = await ImagePicker.launchCameraAsync({ mediaTypes: ['videos'], videoMaxDuration: 15 });
     if (!r.canceled && r.assets[0]) {
       const a = r.assets[0];
-      push({ uri: a.uri, type: 'video', duration: a.duration ? a.duration / 1000 : undefined });
+      push({ uri: a.uri, type: 'video', duration: a.duration ? a.duration / 1000 : undefined, ...assetMeta(a) });
     }
   }
 
@@ -76,7 +88,7 @@ export default function MediaPicker({ items, onChange, maxItems = 6, label }: Pr
     setSheetVisible(false);
     if (!(await reqLibrary())) return;
     const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85 });
-    if (!r.canceled && r.assets[0]) push({ uri: r.assets[0].uri, type: 'photo' });
+    if (!r.canceled && r.assets[0]) push({ uri: r.assets[0].uri, type: 'photo', ...assetMeta(r.assets[0]) });
   }
 
   async function pickVideo() {
@@ -85,7 +97,7 @@ export default function MediaPicker({ items, onChange, maxItems = 6, label }: Pr
     const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['videos'], videoMaxDuration: 15 });
     if (!r.canceled && r.assets[0]) {
       const a = r.assets[0];
-      push({ uri: a.uri, type: 'video', duration: a.duration ? a.duration / 1000 : undefined });
+      push({ uri: a.uri, type: 'video', duration: a.duration ? a.duration / 1000 : undefined, ...assetMeta(a) });
     }
   }
 

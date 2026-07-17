@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { createHash } from "node:crypto";
 import {
   validateCodeForDiscount,
   recordReferralConversion,
@@ -21,9 +22,18 @@ import {
   db,
   ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable,
   ucUsersTable, ucOrdersTable, ucOrderItemsTable, ucTicketsTable, ucWaterTestsTable,
+  ucReviewsTable, ucProductMediaTable,
+  type ReviewMediaItem, type UcProductMedia,
 } from "@workspace/db";
-import { eq, desc, inArray } from "drizzle-orm";
+import { eq, desc, inArray, and, asc } from "drizzle-orm";
 import bcryptjs from "bcryptjs";
+import { logger } from "../lib/logger";
+import {
+  MAX_IMAGE_BYTES,
+  MAX_VIDEO_BYTES,
+  ObjectNotFoundError,
+  ObjectStorageService,
+} from "../lib/objectStorage";
 
 const router = Router();
 
@@ -46,7 +56,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "750ml BPA-free filter bottle with SGS-certified >99.9% bacteria removal. Ahlstrom Disruptor® filter. 60-second cartridge swap. Available in 4 colours. Filter: 150L or 3 months — whichever comes first.",
     shortDescription: "750ml certified filter bottle — 4 colours",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Hydra+Flux", alt: "Hydra Flux" }],
+    images: [{ src: "/api/uc/product-images/hydra-flux-premium-filter-bottle.jpg", alt: "Hydra Flux" }],
     stockStatus: "instock", stockQuantity: 30,
     tags: [{ name: "bestseller" }],
   },
@@ -58,7 +68,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Slim 750ml BPA-free filter bottle for urban commuters. Fits any bike holder or bag. Ahlstrom Disruptor® filter. 60-second filter replacement. SGS-certified. Filter: 150L or 3 months.",
     shortDescription: "Slim 750ml certified filter bottle for commuters",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Truva+Go", alt: "Truva Go" }],
+    images: [{ src: "/api/uc/product-images/truva-go-slim-filter-bottle.jpg", alt: "Truva Go" }],
     stockStatus: "instock", stockQuantity: 25,
     tags: [],
   },
@@ -70,7 +80,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Compact 500ml BPA-free filter bottle for desk, commute, campus, and gym. Ahlstrom Disruptor® filter with SGS-certified bacteria removal. Replaces daily plastic bottle purchases. Filter: 150L or 3 months.",
     shortDescription: "500ml compact certified filter bottle",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Viva+Drop", alt: "Viva Drop" }],
+    images: [{ src: "/api/uc/product-images/viva-drop-compact-filter-bottle.jpg", alt: "Viva Drop" }],
     stockStatus: "instock", stockQuantity: 40,
     tags: [],
   },
@@ -82,7 +92,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "1000ml squeezable BPA-free filter bottle. Ahlstrom Disruptor® filter with SGS-certified bacteria removal. Great for hiking, travel, and outdoor use. Filter: 150L or 3 months.",
     shortDescription: "1L squeezable certified filter bottle",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Flex", alt: "Flex" }],
+    images: [{ src: "/api/uc/product-images/flex-squeezable-filter-bottle.jpg", alt: "Flex" }],
     stockStatus: "instock", stockQuantity: 20,
     tags: [],
   },
@@ -94,7 +104,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "350ml BPA-free kids' filter bottle. SGS-certified bacteria removal keeps your child's water safe at school, sports, and on the go. Easy-squeeze design. Filter: 150L or 3 months.",
     shortDescription: "350ml kids' certified filter bottle",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Timbo", alt: "Timbo" }],
+    images: [{ src: "/api/uc/product-images/timbo-kids-filter-bottle.jpg", alt: "Timbo" }],
     stockStatus: "instock", stockQuantity: 35,
     tags: [],
   },
@@ -106,19 +116,20 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "1200ml motivational filter bottle for gym-goers and athletes. SGS-certified bacteria removal. Wide-mouth design for ice. Ahlstrom Disruptor® filter. Filter: 150L or 3 months.",
     shortDescription: "1.2L motivational certified filter bottle",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Gym+Buddy", alt: "Gym Buddy" }],
+    images: [{ src: "/api/uc/product-images/gym-buddy-1-2l-training-filter-bottle.jpg", alt: "Gym Buddy" }],
     stockStatus: "instock", stockQuantity: 20,
     tags: [],
   },
   {
     id: 7, name: "Survivor Straw", sku: "UC-STR-SVV-007",
     price: "1299", regularPrice: "1299", salePrice: "",
-    lifespanDays: 90,
+    // Catalogue does not confirm this filter's lifespan — conservative 180-day estimate.
+    lifespanDays: 180,
     tagline: "Drink safe from any source.",
-    description: "Portable emergency filter straw. SGS-certified filtration — drink directly from streams, taps, or any water source. Lightweight and compact. Filter: 300L or 3 months — whichever comes first.",
+    description: "Portable emergency filter straw. SGS-certified filtration — drink directly from streams, taps, or any water source. Lightweight and compact. Filter life: estimated ~6 months (exact rating to be confirmed).",
     shortDescription: "Portable certified emergency filter straw",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Survivor+Straw", alt: "Survivor Straw" }],
+    images: [{ src: "/api/uc/product-images/survivor-straw-filter.jpg", alt: "Survivor Straw" }],
     stockStatus: "instock", stockQuantity: 50,
     tags: [],
   },
@@ -130,19 +141,20 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "500ml entry-level BPA-free filter bottle. SGS-certified bacteria removal. Ideal first certified filter bottle. Ahlstrom Disruptor® filter. Filter: 150L or 3 months.",
     shortDescription: "500ml entry-level certified filter bottle",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=Breeze", alt: "Breeze" }],
+    images: [{ src: "/api/uc/product-images/breeze-filter-bottle.jpg", alt: "Breeze" }],
     stockStatus: "instock", stockQuantity: 45,
     tags: [],
   },
   {
     id: 9, name: "EcoSmart Elite", sku: "UC-ESE-ELT-009",
     price: "9799", regularPrice: "9799", salePrice: "",
-    lifespanDays: 120,
+    // Catalogue does not confirm this filter's lifespan — conservative 180-day estimate.
+    lifespanDays: 180,
     tagline: "Solar. Electric. Always clean.",
-    description: "Advanced portable filter with solar charging, electric pump, and built-in power bank. Multi-stage filtration: Nylon Mesh, UF Membrane 0.01µm, Ahlstrom Disruptor®, Carbon Block. Filter: 400L or 4 months.",
+    description: "Advanced portable filter with solar charging, electric pump, and built-in power bank. Multi-stage filtration: Nylon Mesh, UF Membrane 0.01µm, Ahlstrom Disruptor®, Carbon Block. Filter life: estimated ~6 months (exact rating to be confirmed).",
     shortDescription: "Solar-powered certified portable filter with power bank",
     categories: [CAT_BOTTLES],
-    images: [{ src: "https://placehold.co/400x400/0D4FA8/FFFFFF/png?text=EcoSmart+Elite", alt: "EcoSmart Elite" }],
+    images: [{ src: "/api/uc/product-images/ecosmart-elite-field-purifier.jpg", alt: "EcoSmart Elite" }],
     stockStatus: "instock", stockQuantity: 10,
     tags: [{ name: "premium" }],
   },
@@ -156,7 +168,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Clips onto your kitchen tap in under 5 minutes — no tools, no plumber, no drilling. SGS-certified >99.9% bacteria removal. Removes chlorine, sediment, and selected heavy metals that boiling leaves behind. Filter: 4–5 months.",
     shortDescription: "Faucet filter — tool-free, SGS-certified, 4–5 month filter",
     categories: [CAT_HOME],
-    images: [{ src: "https://placehold.co/400x400/005D8F/FFFFFF/png?text=Sweet+Home", alt: "Sweet Home" }],
+    images: [{ src: "/api/uc/product-images/sweet-home-faucet-filter.jpg", alt: "Sweet Home" }],
     stockStatus: "instock", stockQuantity: 30,
     tags: [{ name: "bestseller" }],
   },
@@ -168,7 +180,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Counter-top reverse osmosis delivering multi-stage RO-grade purity without under-sink installation. Sits on your kitchen counter, connects to any standard tap. Removes bacteria, dissolved solids, heavy metals, and chlorine. Ideal for renters and apartments. SGS-certified. Filter: 6 months.",
     shortDescription: "Counter-top RO — no plumbing, SGS-certified, 6-month filter",
     categories: [CAT_HOME],
-    images: [{ src: "https://placehold.co/400x400/005D8F/FFFFFF/png?text=Counter+RO", alt: "Counter Reverse Osmosis" }],
+    images: [{ src: "/api/uc/product-images/counter-reverse-osmosis-system.jpg", alt: "Counter Reverse Osmosis" }],
     stockStatus: "instock", stockQuantity: 8,
     tags: [{ name: "premium" }],
   },
@@ -180,7 +192,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Ultra Clear's counter-top electric filtration pitcher — certified clean water without any tap attachment or installation. Fill from your kitchen tap, press to filter, pour certified clean. Multi-stage filtration with SGS-certified performance. Filter: 400L or 3 months.",
     shortDescription: "Electric counter-top filter pitcher — no installation",
     categories: [CAT_HOME],
-    images: [{ src: "https://placehold.co/400x400/005D8F/FFFFFF/png?text=Electric+Pitcher", alt: "Electric Pitcher" }],
+    images: [{ src: "/api/uc/product-images/electric-pitcher-counter-top-filter.jpg", alt: "Electric Pitcher" }],
     stockStatus: "instock", stockQuantity: 12,
     tags: [],
   },
@@ -193,7 +205,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Under-sink reverse osmosis home filtration in 50G, 75G, and 100G configurations. Multi-stage RO filtration removing bacteria, heavy metals, dissolved solids, and chlorine. Professional installation by Ultra Clear. Annual maintenance contract available. Filter: 6 months. Contact info@ucfilters.com for site assessment.",
     shortDescription: "Under-sink RO system — 50G/75G/100G, professional installation",
     categories: [CAT_HOME],
-    images: [{ src: "https://placehold.co/400x400/005D8F/FFFFFF/png?text=RO+Home", alt: "RO Home System" }],
+    images: [{ src: "/api/uc/product-images/ro-home-system.jpg", alt: "RO Home System" }],
     stockStatus: "instock", stockQuantity: 5,
     tags: [],
   },
@@ -207,7 +219,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Shower filter delivering SGS-certified >95% chlorine removal. Multi-layer filtration media: PP Cotton, KDF, Activated Carbon, Vitamin C. Universal attachment — fits any shower head. Filter: 5 months.",
     shortDescription: "Shower filter — 5-month filter, SGS-certified >95% chlorine removal",
     categories: [CAT_SHOWER],
-    images: [{ src: "https://placehold.co/400x400/52B6DC/FFFFFF/png?text=J'adore", alt: "J'adore" }],
+    images: [{ src: "/api/uc/product-images/jadore-aluminium-shower-filter.jpg", alt: "J'adore" }],
     stockStatus: "instock", stockQuantity: 20,
     tags: [],
   },
@@ -219,7 +231,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Dedicated facial basin filter — SGS-certified >95% chlorine removal at the precise point your skincare routine begins and ends. The water used to cleanse and rinse your face affects how every product performs. Remove the chlorine first. Filter: 4–5 months.",
     shortDescription: "Facial basin filter — removes chlorine at the source of your skincare",
     categories: [CAT_SHOWER],
-    images: [{ src: "https://placehold.co/400x400/52B6DC/FFFFFF/png?text=Channel", alt: "Channel" }],
+    images: [{ src: "/api/uc/product-images/channel-facial-basin-filter.jpg", alt: "Channel" }],
     stockStatus: "instock", stockQuantity: 18,
     tags: [],
   },
@@ -231,7 +243,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Shower filter designed for sensitive, dry, and eczema-prone skin. SGS-certified >95% chlorine removal to reduce the daily chemical load that tap water places on vulnerable skin and scalp. Universal attachment. Filter: 5 months.",
     shortDescription: "Shower filter for sensitive skin — 5-month, SGS-certified",
     categories: [CAT_SHOWER],
-    images: [{ src: "https://placehold.co/400x400/52B6DC/FFFFFF/png?text=Derma+Care", alt: "Derma Care" }],
+    images: [{ src: "/api/uc/product-images/derma-care-shower-filter.jpg", alt: "Derma Care" }],
     stockStatus: "instock", stockQuantity: 15,
     tags: [],
   },
@@ -243,7 +255,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "SGS-certified shower filter delivering >95% chlorine removal with an easy universal attachment. Compact, lightweight design fits any shower head with no tools. 5-month filter life. The entry point to certified shower water. Filter media: PP Cotton, KDF, Activated Carbon.",
     shortDescription: "Entry-level shower filter — 5-month, universal fit",
     categories: [CAT_SHOWER],
-    images: [{ src: "https://placehold.co/400x400/52B6DC/FFFFFF/png?text=Pure+Drop", alt: "Pure Drop" }],
+    images: [{ src: "/api/uc/product-images/pure-drop-shower-filter.jpg", alt: "Pure Drop" }],
     stockStatus: "instock", stockQuantity: 25,
     tags: [],
   },
@@ -255,7 +267,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Faucet-mounted facial filter with SGS-certified >95% chlorine removal at your basin. 6-layer precision filtration: PP Cotton, Carbon Fibre, KDF, Vitamin C, PSS, and UF Membrane. Tool-free install. Perspective window shows condition in real time — swap when colour shifts. Filter: 4–5 months.",
     shortDescription: "Faucet facial filter — 6-layer, perspective window, 4–5 months",
     categories: [CAT_SHOWER],
-    images: [{ src: "https://placehold.co/400x400/52B6DC/FFFFFF/png?text=Derma+Flux", alt: "Derma Flux" }],
+    images: [{ src: "/api/uc/product-images/derma-flux-faucet-facial-filter.jpg", alt: "Derma Flux" }],
     stockStatus: "instock", stockQuantity: 12,
     tags: [{ name: "premium" }],
   },
@@ -283,7 +295,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Neoprene and crochet carry sleeves in universal fit for all Ultra Clear bottles. No filter media — housing accessory only. Price on request.",
     shortDescription: "Neoprene & crochet bottle sleeve — universal fit",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Sleeve", alt: "Bottle Carry Sleeve" }],
+    images: [{ src: "/api/uc/product-images/ultra-clear-bottle-carry-sleeve-crocheted.jpg", alt: "Bottle Carry Sleeve" }],
     stockStatus: "instock", stockQuantity: 999,
     tags: [],
   },
@@ -295,7 +307,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Genuine Ahlstrom Disruptor® replacement cartridge for all Ultra Clear filter bottles (Hydra Flux, Truva Go, Viva Drop, Flex, Timbo, Gym Buddy, Breeze). Maintains SGS-certified >99.9% bacteria removal. Replace every 150L or 3 months.",
     shortDescription: "Genuine replacement cartridge for all UC filter bottles — 3 months",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Bottle+Cartridge", alt: "Bottle Filter Cartridge" }],
+    images: [{ src: "/api/uc/product-images/bottle-filter-cartridge.jpg", alt: "Bottle Filter Cartridge" }],
     stockStatus: "instock", stockQuantity: 100,
     tags: [{ name: "replacement" }, { name: "bestseller" }],
   },
@@ -307,7 +319,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Genuine replacement cartridge for the Sweet Home Faucet Filter. Maintains SGS-certified >99.9% bacteria removal and >95% chlorine removal performance. Replace every 4–5 months or ~1,500–2,000 litres. Ultra Clear replacement reminders included.",
     shortDescription: "Genuine replacement cartridge for Sweet Home faucet filter — 4–5 months",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Faucet+Cartridge", alt: "Faucet Filter Cartridge" }],
+    images: [{ src: "/api/uc/product-images/home-sweet-home-faucet-filter-cartridge.jpg", alt: "Faucet Filter Cartridge" }],
     stockStatus: "instock", stockQuantity: 80,
     tags: [{ name: "replacement" }],
   },
@@ -319,7 +331,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Genuine replacement cartridge for the J'adore, Derma Care, and Pure Drop shower and basin filters. Maintains SGS-certified >95% chlorine removal. Multi-layer filtration media: PP Cotton, KDF, Activated Carbon, Vitamin C. Replace every 5 months.",
     shortDescription: "Genuine shower cartridge for J'adore, Derma Care, Pure Drop — 5 months",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Shower+Cartridge", alt: "Shower Filter Cartridge" }],
+    images: [{ src: "/api/uc/product-images/shower-filter-cartridge.jpg", alt: "Shower Filter Cartridge" }],
     stockStatus: "instock", stockQuantity: 60,
     tags: [{ name: "replacement" }],
   },
@@ -331,16 +343,17 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Genuine replacement cartridge for the Derma Flux facial faucet filter. Precision 6-layer filtration: PP Cotton, Carbon Fibre, KDF, Vitamin C, PSS, and UF Membrane. Perspective window shows condition — swap when colour shifts. Maintains SGS-certified >95% chlorine removal. Replace every 4–5 months.",
     shortDescription: "Genuine 6-layer replacement cartridge for Derma Flux — 4–5 months",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Derma+Flux+Cart", alt: "Derma Flux Cartridge" }],
+    images: [{ src: "/api/uc/product-images/derma-flux-filter-cartridge.jpg", alt: "Derma Flux Cartridge" }],
     stockStatus: "instock", stockQuantity: 40,
     tags: [{ name: "replacement" }],
   },
   {
     id: 26, name: "Survivor Straw Cartridge", sku: "UC-BOG-FCS-017",
     price: "499", regularPrice: "499", salePrice: "",
-    lifespanDays: 90,
+    // Matches Survivor Straw: lifespan unconfirmed — conservative 180-day estimate.
+    lifespanDays: 180,
     tagline: "Renew the straw. Restore the protection.",
-    description: "Genuine replacement filter cartridge for the Ultra Clear Survivor Straw. Restores full SGS-certified filtration performance. Compact, lightweight, and easy to swap in the field. Replace when flow slows or after ~300 litres / 3 months.",
+    description: "Genuine replacement filter cartridge for the Ultra Clear Survivor Straw. Restores full SGS-certified filtration performance. Compact, lightweight, and easy to swap in the field. Replace when flow slows — estimated ~6 months (exact rating to be confirmed).",
     shortDescription: "Genuine replacement cartridge for Survivor Straw",
     categories: [CAT_ACCESS],
     images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Straw+Cartridge", alt: "Survivor Straw Cartridge" }],
@@ -355,7 +368,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Replacement outer shell for the Survivor Straw filter. Durable BPA-free housing with universal thread fit — pair with a fresh Survivor Straw Cartridge for a fully rebuilt straw at minimal cost. Lightweight and compact.",
     shortDescription: "Replacement housing shell for Survivor Straw",
     categories: [CAT_ACCESS],
-    images: [{ src: "https://placehold.co/400x400/1A6FD4/FFFFFF/png?text=Filter+Shell", alt: "Filter Shell" }],
+    images: [{ src: "/api/uc/product-images/filter-shell-straw-shell.jpg", alt: "Filter Shell" }],
     stockStatus: "instock", stockQuantity: 50,
     tags: [],
   },
@@ -369,7 +382,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Commercial reverse osmosis infrastructure for 50–200+ staff. Two configurations: Aqua Stream 1200 at KES 69,990 and Aqua Stream 1200 Pro on request. Full documentation pack (SGS, FDA, RoHS) within 24 hours. Annual ESG impact statement for corporate reporting. Site assessment, installation, and maintenance contract available. Filter: 6–9 months.",
     shortDescription: "Commercial 1200GPD RO system — KES 69,990 / Pro on request",
     categories: [CAT_SOLUTIONS],
-    images: [{ src: "https://placehold.co/400x400/083060/FFFFFF/png?text=Aqua+Stream+1200", alt: "Aqua Stream 1200" }],
+    images: [{ src: "/api/uc/product-images/aqua-stream-1200-commercial-ro-system.jpg", alt: "Aqua Stream 1200" }],
     stockStatus: "instock", stockQuantity: 3,
     tags: [{ name: "commercial" }],
   },
@@ -382,7 +395,7 @@ const MOCK_PRODUCTS: Record<string, unknown>[] = [
     description: "Pay-per-litre certified water infrastructure. Ultra Clear Water ATMs bring SGS-certified filtered water to communities at KES 2–5 per litre. Host and placement enquiries: info@ucfilters.com.",
     shortDescription: "Community certified water ATMs — host enquiries welcome",
     categories: [CAT_SOLUTIONS],
-    images: [{ src: "https://placehold.co/400x400/083060/FFFFFF/png?text=Water+ATMs", alt: "Water ATMs" }],
+    images: [{ src: "/api/uc/product-images/ultra-clear-water-atm.jpg", alt: "Water ATMs" }],
     stockStatus: "instock", stockQuantity: 0,
     tags: [{ name: "commercial" }],
   },
@@ -496,36 +509,78 @@ function normalizeOrder(o: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+// ─── Product media overlay ────────────────────────────────────────────────────
+// Team-uploaded photos/videos stored in uc_product_media are merged on top of
+// the base catalogue (mock or WooCommerce) so extra media survives a future
+// switch to the live store. A DB hiccup must never take down the catalogue —
+// failures are logged loudly and the base product is served unchanged.
+async function fetchProductMediaMap(productIds: number[]): Promise<Map<number, UcProductMedia[]>> {
+  const map = new Map<number, UcProductMedia[]>();
+  if (productIds.length === 0) return map;
+  try {
+    const rows = await db
+      .select()
+      .from(ucProductMediaTable)
+      .where(inArray(ucProductMediaTable.productId, productIds))
+      .orderBy(asc(ucProductMediaTable.position), asc(ucProductMediaTable.id));
+    for (const row of rows) {
+      const list = map.get(row.productId) ?? [];
+      list.push(row);
+      map.set(row.productId, list);
+    }
+  } catch (err) {
+    logger.error({ err }, "Failed to load product media overlay — serving base catalogue only");
+  }
+  return map;
+}
+
+function applyProductMedia(
+  product: Record<string, unknown>,
+  media: UcProductMedia[] | undefined,
+): Record<string, unknown> {
+  const baseImages = (product["images"] as { src: string; alt: string }[] | undefined) ?? [];
+  if (!media || media.length === 0) {
+    return { ...product, videoUrl: null };
+  }
+  const photos = media
+    .filter((m) => m.type === "photo")
+    .map((m) => ({ src: m.url, alt: m.alt || (product["name"] as string) }));
+  const video = media.find((m) => m.type === "video");
+  return { ...product, images: [...baseImages, ...photos], videoUrl: video?.url ?? null };
+}
+
 // ─── Products ─────────────────────────────────────────────────────────────────
 router.get("/uc/products", async (req: Request, res: Response): Promise<void> => {
   try {
+    let payload: Record<string, unknown>[] | null = null;
     if (hasWCCredentials()) {
       const extra: Record<string, string> = { per_page: "50" };
       if (req.query["category"]) extra["category"] = req.query["category"] as string;
       if (req.query["search"]) extra["search"] = req.query["search"] as string;
       const products = await wcFetchArray("/products", extra);
-      if (products) {
-        res.json(products.map(normalizeProduct));
-        return;
+      if (products) payload = products.map(normalizeProduct);
+    }
+    if (!payload) {
+      let data = MOCK_PRODUCTS;
+      if (req.query["category"]) {
+        const cat = (req.query["category"] as string).toLowerCase();
+        data = data.filter((p) => {
+          const cats = p["categories"] as { name: string }[] | undefined;
+          return cats?.some((c) => c.name.toLowerCase() === cat);
+        });
       }
+      if (req.query["search"]) {
+        const q = (req.query["search"] as string).toLowerCase();
+        data = data.filter(
+          (p) =>
+            (p["name"] as string).toLowerCase().includes(q) ||
+            (p["sku"] as string).toLowerCase().includes(q)
+        );
+      }
+      payload = data;
     }
-    let data = MOCK_PRODUCTS;
-    if (req.query["category"]) {
-      const cat = (req.query["category"] as string).toLowerCase();
-      data = data.filter((p) => {
-        const cats = p["categories"] as { name: string }[] | undefined;
-        return cats?.some((c) => c.name.toLowerCase() === cat);
-      });
-    }
-    if (req.query["search"]) {
-      const q = (req.query["search"] as string).toLowerCase();
-      data = data.filter(
-        (p) =>
-          (p["name"] as string).toLowerCase().includes(q) ||
-          (p["sku"] as string).toLowerCase().includes(q)
-      );
-    }
-    res.json(data);
+    const mediaMap = await fetchProductMediaMap(payload.map((p) => Number(p["id"])));
+    res.json(payload.map((p) => applyProductMedia(p, mediaMap.get(Number(p["id"])))));
   } catch {
     res.status(500).json({ error: "Failed to fetch products" });
   }
@@ -534,21 +589,344 @@ router.get("/uc/products", async (req: Request, res: Response): Promise<void> =>
 router.get("/uc/products/:id", async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params["id"]));
   try {
+    let payload: Record<string, unknown> | null = null;
     if (hasWCCredentials()) {
       const product = await wcFetchOne(`/products/${id}`);
-      if (product) {
-        res.json(normalizeProduct(product));
+      if (product) payload = normalizeProduct(product);
+    }
+    if (!payload) {
+      const product = MOCK_PRODUCTS.find((p) => p["id"] === id);
+      if (!product) {
+        res.status(404).json({ error: "Not found" });
         return;
       }
+      payload = product;
     }
-    const product = MOCK_PRODUCTS.find((p) => p["id"] === id);
-    if (!product) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    res.json(product);
+    const mediaMap = await fetchProductMediaMap([id]);
+    res.json(applyProductMedia(payload, mediaMap.get(id)));
   } catch {
     res.status(500).json({ error: "Failed to fetch product" });
+  }
+});
+
+// ─── Reviews ──────────────────────────────────────────────────────────────────
+const REVIEW_MAX_MEDIA = 4;
+
+/** Accepts "/objects/…" (raw objectPath), "/api/storage/objects/…",
+ *  "/api/uc/product-images/…" or absolute http(s) URLs. Anything else → null. */
+function normalizeMediaUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/objects/")) return `/api/storage${raw}`;
+  if (raw.startsWith("/api/storage/objects/")) return raw;
+  if (raw.startsWith("/api/uc/product-images/")) return raw;
+  return null;
+}
+
+router.get("/uc/products/:id/reviews", async (req: Request, res: Response): Promise<void> => {
+  const productId = parseInt(String(req.params["id"]));
+  if (isNaN(productId)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+  try {
+    const rows = await db
+      .select()
+      .from(ucReviewsTable)
+      .where(eq(ucReviewsTable.productId, productId))
+      .orderBy(desc(ucReviewsTable.createdAt));
+    const count = rows.length;
+    const average = count
+      ? Math.round((rows.reduce((s, r) => s + r.rating, 0) / count) * 10) / 10
+      : 0;
+    const claims = verifyToken(req.headers["authorization"]);
+    const uid = claims ? String(claims.id) : null;
+    res.json({
+      average,
+      count,
+      reviews: rows.map((r) => ({
+        id: r.id,
+        rating: r.rating,
+        title: r.title,
+        body: r.body,
+        authorName: r.authorName,
+        media: r.media ?? [],
+        createdAt: r.createdAt,
+        mine: uid !== null && r.userId === uid,
+      })),
+    });
+  } catch (err) {
+    logger.error({ err, productId }, "Failed to load reviews");
+    res.status(500).json({ error: "Failed to load reviews" });
+  }
+});
+
+router.post("/uc/products/:id/reviews", async (req: Request, res: Response): Promise<void> => {
+  const claims = verifyToken(req.headers["authorization"]);
+  if (!claims) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const productId = parseInt(String(req.params["id"]));
+  if (isNaN(productId)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+
+  const { rating, title, body, media } = req.body as {
+    rating?: unknown; title?: unknown; body?: unknown;
+    media?: { url?: unknown; type?: unknown }[];
+  };
+
+  const stars = Number(rating);
+  if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+    res.status(400).json({ error: "Rating must be a whole number from 1 to 5" });
+    return;
+  }
+  const text = typeof body === "string" ? body.trim() : "";
+  if (text.length < 3) {
+    res.status(400).json({ error: "Please write a few words about the product" });
+    return;
+  }
+  if (text.length > 2000) {
+    res.status(400).json({ error: "Review is too long (max 2000 characters)" });
+    return;
+  }
+
+  const items: ReviewMediaItem[] = [];
+  if (media !== undefined) {
+    if (!Array.isArray(media) || media.length > REVIEW_MAX_MEDIA) {
+      res.status(400).json({ error: `You can attach up to ${REVIEW_MAX_MEDIA} photos/videos` });
+      return;
+    }
+    let videos = 0;
+    for (const m of media) {
+      const url = normalizeMediaUrl(m?.url);
+      const type = m?.type === "video" ? "video" : m?.type === "photo" ? "photo" : null;
+      if (!url || !type) {
+        res.status(400).json({ error: "Invalid attachment" });
+        return;
+      }
+      if (type === "video" && ++videos > 1) {
+        res.status(400).json({ error: "Only one video per review" });
+        return;
+      }
+      items.push({ url, type });
+    }
+  }
+  const reviewMediaError = await verifyUploadedMediaItems(items);
+  if (reviewMediaError) {
+    res.status(400).json({ error: reviewMediaError });
+    return;
+  }
+
+  const userId = String(claims.id);
+  // Prefer the fresh DB name; fall back to whatever the JWT carries.
+  let authorName = [claims.firstName, claims.lastName?.[0] ? `${claims.lastName[0]}.` : ""]
+    .filter(Boolean).join(" ") || "Customer";
+  try {
+    const numericId = Number(userId);
+    if (!isNaN(numericId) && numericId > 0 && numericId < 1_000_000_000) {
+      const dbUser = await db.query.ucUsersTable.findFirst({ where: eq(ucUsersTable.id, numericId) });
+      if (dbUser) {
+        authorName = [dbUser.firstName, dbUser.lastName?.[0] ? `${dbUser.lastName[0]}.` : ""]
+          .filter(Boolean).join(" ") || "Customer";
+      }
+    }
+  } catch { /* keep JWT-derived name */ }
+
+  try {
+    const existing = await db.query.ucReviewsTable.findFirst({
+      where: and(eq(ucReviewsTable.productId, productId), eq(ucReviewsTable.userId, userId)),
+    });
+    if (existing) {
+      const [updated] = await db
+        .update(ucReviewsTable)
+        .set({ rating: stars, title: typeof title === "string" ? title.trim() : "", body: text, media: items, authorName })
+        .where(eq(ucReviewsTable.id, existing.id))
+        .returning();
+      res.json({ ...updated, updated: true });
+      return;
+    }
+    const [row] = await db
+      .insert(ucReviewsTable)
+      .values({
+        productId,
+        userId,
+        authorName,
+        rating: stars,
+        title: typeof title === "string" ? title.trim() : "",
+        body: text,
+        media: items,
+      })
+      .returning();
+    res.status(201).json(row);
+  } catch (err) {
+    logger.error({ err, productId, userId }, "Failed to save review");
+    res.status(500).json({ error: "Failed to save review" });
+  }
+});
+
+// ─── Admin · product media management ─────────────────────────────────────────
+function adminEmailList(): string[] {
+  return (process.env["UC_ADMIN_EMAILS"] ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function isAdminRequest(authHeader: string | undefined): Promise<boolean> {
+  const claims = verifyToken(authHeader);
+  if (!claims) return false;
+  // Admin is strictly DB-anchored: the bearer token must resolve to a real
+  // registered user row. JWT claims alone are NEVER trusted for admin — the
+  // dev login fallback can mint tokens carrying an arbitrary email.
+  const numericId = Number(claims.id);
+  if (isNaN(numericId) || numericId <= 0 || numericId >= 1_000_000_000) return false;
+  try {
+    const dbUser = await db.query.ucUsersTable.findFirst({ where: eq(ucUsersTable.id, numericId) });
+    if (!dbUser) return false;
+    return dbUser.isAdmin || adminEmailList().includes(dbUser.email.toLowerCase());
+  } catch {
+    return false; // DB unavailable → fail closed
+  }
+}
+
+// Attach-time verification of uploaded media ---------------------------------
+const objectStorage = new ObjectStorageService();
+const UPLOADED_MEDIA_PREFIX = "/api/storage/objects/";
+
+/** Presigned PUT URLs cannot bind size or content-type, so whatever the
+ *  client actually uploaded must be re-checked here, the moment an object is
+ *  attached to a review / ticket / water test / product. Returns an error
+ *  message, or null when every attachment checks out. Never throws. */
+async function verifyUploadedMediaItems(items: ReviewMediaItem[]): Promise<string | null> {
+  for (const item of items) {
+    if (!item.url.startsWith(UPLOADED_MEDIA_PREFIX)) continue; // catalogue/external URL — nothing stored to verify
+    const objectPath = item.url.slice("/api/storage".length); // "/objects/uploads/<id>"
+    if (!objectPath.startsWith("/objects/uploads/")) return "Invalid attachment";
+    try {
+      const file = await objectStorage.getObjectEntityFile(objectPath);
+      const [metadata] = await file.getMetadata();
+      const contentType = String(metadata.contentType ?? "");
+      const size = Number(metadata.size ?? 0);
+      if (item.type === "photo" && !contentType.startsWith("image/")) return "Attachment is not an image";
+      if (item.type === "video" && !contentType.startsWith("video/")) return "Attachment is not a video";
+      const cap = item.type === "video" ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+      if (size <= 0 || size > cap) {
+        return `Attachment exceeds the ${Math.round(cap / 1024 / 1024)} MB limit`;
+      }
+    } catch (err) {
+      if (err instanceof ObjectNotFoundError) return "Attachment upload not found — please re-attach it";
+      logger.error({ err, url: item.url }, "Failed to verify uploaded media");
+      return "Could not verify attachment — please try again";
+    }
+  }
+  return null;
+}
+
+/** Normalize an optional array of media URLs from the client. Returns null on
+ *  malformed input (wrong shape, too many, or off-whitelist URL). */
+function sanitizeMediaUrls(value: unknown, max: number): string[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > max) return null;
+  const out: string[] = [];
+  for (const v of value) {
+    const normalized = normalizeMediaUrl(v);
+    if (!normalized) return null;
+    out.push(normalized);
+  }
+  return out;
+}
+
+router.get("/uc/admin/products/:id/media", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+  const productId = parseInt(String(req.params["id"]));
+  if (isNaN(productId)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+  try {
+    const rows = await db
+      .select()
+      .from(ucProductMediaTable)
+      .where(eq(ucProductMediaTable.productId, productId))
+      .orderBy(asc(ucProductMediaTable.position), asc(ucProductMediaTable.id));
+    res.json(rows);
+  } catch (err) {
+    logger.error({ err, productId }, "Failed to load product media");
+    res.status(500).json({ error: "Failed to load product media" });
+  }
+});
+
+router.post("/uc/admin/products/:id/media", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+  const productId = parseInt(String(req.params["id"]));
+  if (isNaN(productId)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+  const { url, type, alt, position } = req.body as {
+    url?: unknown; type?: unknown; alt?: unknown; position?: unknown;
+  };
+  const normalized = normalizeMediaUrl(url);
+  const mediaType = type === "video" ? "video" : type === "photo" ? "photo" : null;
+  if (!normalized || !mediaType) {
+    res.status(400).json({ error: "A valid url and type ('photo' | 'video') are required" });
+    return;
+  }
+  const adminMediaError = await verifyUploadedMediaItems([{ url: normalized, type: mediaType }]);
+  if (adminMediaError) {
+    res.status(400).json({ error: adminMediaError });
+    return;
+  }
+  try {
+    const [row] = await db
+      .insert(ucProductMediaTable)
+      .values({
+        productId,
+        type: mediaType,
+        url: normalized,
+        alt: typeof alt === "string" ? alt : "",
+        position: Number.isInteger(Number(position)) ? Number(position) : 0,
+      })
+      .returning();
+    res.status(201).json(row);
+  } catch (err) {
+    logger.error({ err, productId }, "Failed to add product media");
+    res.status(500).json({ error: "Failed to add product media" });
+  }
+});
+
+router.delete("/uc/admin/media/:mediaId", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+  const mediaId = parseInt(String(req.params["mediaId"]));
+  if (isNaN(mediaId)) {
+    res.status(400).json({ error: "Invalid media id" });
+    return;
+  }
+  try {
+    const deleted = await db
+      .delete(ucProductMediaTable)
+      .where(eq(ucProductMediaTable.id, mediaId))
+      .returning();
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "Media not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, mediaId }, "Failed to delete product media");
+    res.status(500).json({ error: "Failed to delete product media" });
   }
 });
 
@@ -576,11 +954,22 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
     ) {
       const d = jwtData as Record<string, unknown>;
       const displayName = (d["user_display_name"] as string | undefined) ?? "";
+      const wcEmail = String(d["user_email"] ?? email).toLowerCase().trim();
       // Re-issue our own signed JWT so it can be verified server-side.
       // The original WC token (signed with the WC secret) is discarded.
+      //
+      // Principal id: the JWT plugin response carries no numeric user id, so
+      // derive a stable per-user id from the (lowercased) email. Offset by 1e9
+      // so it can NEVER collide with a uc_users serial id — DB-anchored logic
+      // (admin checks, profile lookups) treats ids >= 1e9 as non-DB principals.
+      // This also avoids linking Woo logins to same-email app accounts, which
+      // would be an account-takeover vector if a Woo email were unverified.
+      const wooPrincipalId =
+        1_000_000_000 +
+        parseInt(createHash("sha256").update(wcEmail).digest("hex").slice(0, 13), 16);
       const wcUser = {
-        id: 1,
-        email:     String(d["user_email"] ?? ""),
+        id: wooPrincipalId,
+        email:     wcEmail,
         firstName: displayName.split(" ")[0] ?? "Customer",
         lastName:  displayName.split(" ").slice(1).join(" "),
       };
@@ -607,8 +996,10 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
       }
     } catch { /* DB unavailable — fall through to ephemeral session */ }
 
-    // No DB record: allow login if password is >= 6 chars (dev / new-install mode)
-    if (password.length >= 6) {
+    // No DB record. Development only: allow an ephemeral demo session so the
+    // app can be tried before WooCommerce credentials exist. Never in
+    // production — it would let anyone mint a token for an arbitrary email.
+    if (process.env["NODE_ENV"] !== "production" && password.length >= 6) {
       const name = email.split("@")[0] ?? "customer";
       const mockUser = {
         id:        Date.now(),
@@ -697,6 +1088,7 @@ router.get("/uc/customer/profile", async (req: Request, res: Response): Promise<
           phone: dbUser.phone,
           firstName: dbUser.firstName,
           lastName: dbUser.lastName,
+          isAdmin: dbUser.isAdmin || adminEmailList().includes(dbUser.email.toLowerCase()),
           billing:  { firstName: dbUser.firstName, lastName: dbUser.lastName, city: "Nairobi", country: "KE", phone: dbUser.phone },
           shipping: { firstName: dbUser.firstName, lastName: dbUser.lastName, city: "Nairobi", country: "KE", phone: dbUser.phone },
         });
@@ -711,6 +1103,9 @@ router.get("/uc/customer/profile", async (req: Request, res: Response): Promise<
     firstName: claims.firstName ?? "",
     lastName:  claims.lastName  ?? "",
     phone:     "",
+    // Fallback identities are not DB-anchored, so they can never be admin
+    // (the email in the JWT is client-chosen in dev mode).
+    isAdmin:   false,
     billing:   { firstName: claims.firstName ?? "", lastName: claims.lastName ?? "", city: "Nairobi", country: "KE", phone: "" },
     shipping:  { firstName: claims.firstName ?? "", lastName: claims.lastName ?? "", city: "Nairobi", country: "KE", phone: "" },
   });
@@ -1528,14 +1923,29 @@ router.get("/uc/tickets", async (req: Request, res: Response): Promise<void> => 
 
 router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> => {
   const userId = userIdFromBearer(req.headers["authorization"]);
-  const { productModel, issueDescription, preferredContactTime, photos } = req.body as {
+  const { productModel, issueDescription, preferredContactTime, photos, videos } = req.body as {
     productModel?: string;
     issueDescription?: string;
     preferredContactTime?: string;
     photos?: string[];
+    videos?: string[];
   };
   if (!productModel || !issueDescription) {
     res.status(400).json({ error: "Required fields missing" });
+    return;
+  }
+  const photoList = sanitizeMediaUrls(photos, 6);
+  const videoList = sanitizeMediaUrls(videos, 2);
+  if (photoList === null || videoList === null) {
+    res.status(400).json({ error: "Invalid attachment" });
+    return;
+  }
+  const ticketMediaError = await verifyUploadedMediaItems([
+    ...photoList.map((u) => ({ url: u, type: "photo" as const })),
+    ...videoList.map((u) => ({ url: u, type: "video" as const })),
+  ]);
+  if (ticketMediaError) {
+    res.status(400).json({ error: ticketMediaError });
     return;
   }
   const id = `TKT-${Date.now()}`;
@@ -1546,7 +1956,8 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       productModel,
       issueDescription,
       preferredContactTime: preferredContactTime ?? "Any time",
-      photos: photos ?? [],
+      photos: photoList,
+      videos: videoList,
     }).returning();
     // SMS + email confirmation (fire-and-forget)
     getUserContact(userId).then(contact => {
@@ -1567,7 +1978,8 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
     const fallback = {
       id, userId, productModel, issueDescription,
       preferredContactTime: preferredContactTime ?? "Any time",
-      photos: photos ?? [],
+      photos: photoList,
+      videos: videoList,
       status: "submitted",
       createdAt: new Date().toISOString(),
     };
@@ -1592,15 +2004,31 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
 // ─── Water Tests ──────────────────────────────────────────────────────────────
 router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void> => {
   const userId = userIdFromBearer(req.headers["authorization"]);
-  const { name, address, phone, waterSource, concerns } = req.body as {
+  const { name, address, phone, waterSource, concerns, photos, videos } = req.body as {
     name?: string;
     address?: string;
     phone?: string;
     waterSource?: string;
     concerns?: string;
+    photos?: string[];
+    videos?: string[];
   };
   if (!name || !address || !phone) {
     res.status(400).json({ error: "Required fields missing" });
+    return;
+  }
+  const photoList = sanitizeMediaUrls(photos, 6);
+  const videoList = sanitizeMediaUrls(videos, 2);
+  if (photoList === null || videoList === null) {
+    res.status(400).json({ error: "Invalid attachment" });
+    return;
+  }
+  const wtMediaError = await verifyUploadedMediaItems([
+    ...photoList.map((u) => ({ url: u, type: "photo" as const })),
+    ...videoList.map((u) => ({ url: u, type: "video" as const })),
+  ]);
+  if (wtMediaError) {
+    res.status(400).json({ error: wtMediaError });
     return;
   }
   const id = `WT-${Date.now()}`;
@@ -1613,6 +2041,8 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
       phone,
       waterSource: waterSource ?? "Municipal",
       concerns:    concerns ?? "",
+      photos:      photoList,
+      videos:      videoList,
     }).returning();
     // SMS + email confirmation — phone submitted in form (fire-and-forget)
     const firstName = name.split(" ")[0] ?? name;
@@ -1633,6 +2063,8 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
       id, userId, name, address, phone,
       waterSource: waterSource ?? "Municipal",
       concerns:    concerns ?? "",
+      photos:      photoList,
+      videos:      videoList,
       status:      "pending",
       createdAt:   new Date().toISOString(),
     };

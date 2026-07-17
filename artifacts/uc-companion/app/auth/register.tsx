@@ -8,6 +8,7 @@ import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
+import BrandLogo from '@/components/BrandLogo';
 
 // ── Phone helpers ─────────────────────────────────────────────────────────────
 
@@ -99,9 +100,7 @@ export default function RegisterScreen() {
       <ScrollView style={[styles.screen, { backgroundColor: colors.background }]}
         contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
-        <View style={[styles.logoWrap, { backgroundColor: colors.primary }]}>
-          <Ionicons name="water" size={36} color="#fff" />
-        </View>
+        <BrandLogo width={84} style={{ marginBottom: 4 }} />
         <Text style={[styles.title, { color: colors.text }]}>Create Account</Text>
         <Text style={[styles.sub, { color: colors.mutedForeground }]}>Join Ultra-Clear today</Text>
 
@@ -226,7 +225,6 @@ export default function RegisterScreen() {
 const styles = StyleSheet.create({
   screen:         { flex: 1 },
   content:        { padding: 32, alignItems: 'center', gap: 8, paddingTop: Platform.OS === 'web' ? 100 : 60 },
-  logoWrap:       { width: 72, height: 72, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
   title:          { fontSize: 28, fontWeight: '800' as const },
   sub:            { fontSize: 15, marginBottom: 16 },
   form:           { width: '100%', gap: 14 },

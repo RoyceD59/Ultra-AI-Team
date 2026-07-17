@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
-import { UCProduct } from '@/hooks/useApi';
+import { UCProduct, resolveMediaUrl } from '@/hooks/useApi';
 import { useCart } from '@/context/CartContext';
 import * as Haptics from 'expo-haptics';
 
@@ -24,7 +24,9 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
   const router = useRouter();
   const { addItem } = useCart();
   const isEnquiryOnly = product.enquiryOnly === true;
-  const isOnSale = !isEnquiryOnly && product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
+  // NB: must be a real boolean — an empty-string salePrice would otherwise make
+  // this '' and render a stray text node inside the card View on web.
+  const isOnSale = !isEnquiryOnly && !!product.salePrice && parseFloat(product.salePrice) < parseFloat(product.regularPrice);
   const displayPrice = product.salePrice || product.price || product.regularPrice;
 
   const handleAddToCart = () => {
@@ -34,7 +36,7 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
       name: product.name,
       price: parseFloat(displayPrice),
       quantity: 1,
-      image: product.images[0]?.src ?? '',
+      image: resolveMediaUrl(product.images[0]?.src ?? ''),
       sku: product.sku,
     });
   };
@@ -50,15 +52,20 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
         style={[styles.listCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <View style={[styles.listImageWrap, { backgroundColor: colors.surface }]}>
           {product.images[0] ? (
-            <Image source={{ uri: product.images[0].src }} style={styles.listImage} resizeMode="contain" />
+            <Image source={{ uri: resolveMediaUrl(product.images[0].src) }} style={styles.listImage} resizeMode="contain" />
           ) : (
             <Ionicons name="water-outline" size={28} color={colors.primary} />
           )}
         </View>
         <View style={styles.listInfo}>
           <Text style={[styles.listName, { color: colors.text }]} numberOfLines={2}>{product.name}</Text>
+          {!!product.tagline && (
+            <Text style={[styles.listTagline, { color: colors.mutedForeground }]} numberOfLines={1}>
+              {product.tagline}
+            </Text>
+          )}
           <Text style={[styles.listCategory, { color: colors.mutedForeground }]}>
-            {product.categories[0]?.name ?? ''}
+            {[product.sku, product.categories[0]?.name].filter(Boolean).join(' · ')}
           </Text>
           <View style={styles.listPriceRow}>
             {isEnquiryOnly
@@ -108,7 +115,7 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
       )}
       <View style={[styles.imageWrap, { backgroundColor: colors.surface }]}>
         {product.images[0] ? (
-          <Image source={{ uri: product.images[0].src }} style={styles.image} resizeMode="contain" />
+          <Image source={{ uri: resolveMediaUrl(product.images[0].src) }} style={styles.image} resizeMode="contain" />
         ) : (
           <Ionicons name="water-outline" size={40} color={colors.primary} />
         )}
@@ -118,6 +125,14 @@ export default function ProductCard({ product, onPress, layout = 'grid' }: Props
           {product.categories[0]?.name ?? ''}
         </Text>
         <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>{product.name}</Text>
+        {!!product.tagline && (
+          <Text style={[styles.tagline, { color: colors.mutedForeground }]} numberOfLines={1}>
+            {product.tagline}
+          </Text>
+        )}
+        {!!product.sku && (
+          <Text style={[styles.sku, { color: colors.mutedForeground }]}>{product.sku}</Text>
+        )}
 
         {isEnquiryOnly
           ? <>
@@ -156,6 +171,9 @@ const styles = StyleSheet.create({
   info: { padding: 12, gap: 4 },
   category: { fontSize: 11, fontWeight: '600' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
   name: { fontSize: 13, fontWeight: '600' as const, lineHeight: 18 },
+  tagline: { fontSize: 11, lineHeight: 15 },
+  sku: { fontSize: 10, letterSpacing: 0.3 },
+  listTagline: { fontSize: 12, lineHeight: 16, marginTop: 1 },
   priceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   price: { fontSize: 15, fontWeight: '700' as const },
   oldPrice: { fontSize: 12, textDecorationLine: 'line-through' },

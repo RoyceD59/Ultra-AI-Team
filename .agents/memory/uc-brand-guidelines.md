@@ -77,6 +77,7 @@ Minimum padding = **2 × (1/3 of logo width)** on all sides.
 
 ---
 
-## Logo asset location
-`attached_assets/ULTRA_CLEAR_Primary_Logo_Black_1_1784217273331.jpg`
-(The "black" filename refers to the dark-mode version; the primary on-white version uses Deep Ocean Blue `#005d8f`.)
+## Logo asset locations
+- Source lock-ups (attached by user): `attached_assets/ULTRA_CLEAR_Primary_Logo_Black_1_1784217273331.jpg`, `attached_assets/ULTRA_CLEAR_Primary_Logo_2_Reverse_Deep_Ocean_1784264709516.jpg` (CMYK JPEG — convert to sRGB before processing).
+- **Cropped app lock-up (user-approved, July 2026): ULTRA wordmark + UC emblem with "CLEAR" cropped off.** Hi-res transparent PNGs in `attached_assets/brand/`: white (reverse, for blue/dark bg), deep-ocean `#005d8f` (for white bg), and the flattened original crop.
+- The user explicitly approved separating the "CLEAR" wordmark for the app logo despite the brand book's "do not separate" rule — user instruction wins. App icon/splash use the white lock-up on `#005d8f`.

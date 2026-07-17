@@ -29,3 +29,5 @@ export * from "./uc-users";
 export * from "./uc-orders";
 export * from "./uc-tickets";
 export * from "./uc-water-tests";
+export * from "./uc-reviews";
+export * from "./uc-product-media";

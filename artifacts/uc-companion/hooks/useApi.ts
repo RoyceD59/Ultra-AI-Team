@@ -6,6 +6,17 @@ const getBase = () =>
     ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
     : 'http://localhost:8080';
 
+/**
+ * Product/review media URLs from the API are relative paths
+ * ("/api/uc/product-images/…", "/api/storage/objects/…").
+ * Resolve them against the API base; absolute and local URIs pass through.
+ */
+export const resolveMediaUrl = (src?: string | null): string => {
+  if (!src) return '';
+  if (/^(https?:|file:|blob:|data:|content:)/.test(src)) return src;
+  return `${getBase()}${src}`;
+};
+
 export interface UCProduct {
   id: number;
   name: string;
@@ -14,6 +25,8 @@ export interface UCProduct {
   salePrice: string;
   description: string;
   shortDescription: string;
+  /** One-line marketing tagline from the catalogue. */
+  tagline: string;
   categories: { id: number; name: string }[];
   images: { src: string; alt: string }[];
   sku: string;
@@ -21,6 +34,47 @@ export interface UCProduct {
   stockQuantity: number | null;
   tags: { name: string }[];
   enquiryOnly?: boolean;
+  /** Team-uploaded product video (relative API path), shown in the gallery. */
+  videoUrl?: string | null;
+}
+
+export interface UCReviewMedia {
+  url: string;
+  type: 'photo' | 'video';
+}
+
+export interface UCReview {
+  id: number;
+  rating: number;
+  title: string;
+  body: string;
+  authorName: string;
+  media: UCReviewMedia[];
+  createdAt: string;
+  /** True when this review belongs to the requesting user. */
+  mine?: boolean;
+}
+
+export interface UCReviewsResponse {
+  average: number;
+  count: number;
+  reviews: UCReview[];
+}
+
+export interface UCProductMediaRow {
+  id: number;
+  productId: number;
+  type: 'photo' | 'video';
+  url: string;
+  alt: string;
+  position: number;
+  createdAt: string;
+}
+
+export interface UploadUrlResponse {
+  uploadURL: string;
+  objectPath: string;
+  kind: 'photo' | 'video';
 }
 
 export interface UCEnquiry {
@@ -56,6 +110,7 @@ export interface UCAddress {
 }
 
 export interface UCCustomer {
+  isAdmin?: boolean;
   id: number;
   email: string;
   firstName: string;
@@ -273,6 +328,40 @@ export function useApi() {
       phone: string;
       message: string;
     }) => post<{ ok: boolean; message: string }>('/api/uc/enquiries', data),
+
+    /** Fetch reviews + rating summary for a product (public). */
+    getReviews: (productId: number) =>
+      get<UCReviewsResponse>(`/api/uc/products/${productId}/reviews`),
+    /** Create or update the signed-in user's review for a product. */
+    submitReview: (productId: number, data: {
+      rating: number;
+      body: string;
+      title?: string;
+      media?: UCReviewMedia[];
+    }) => post<UCReview>(`/api/uc/products/${productId}/reviews`, data),
+    /** Step 1 of media upload: get a presigned PUT URL (requires sign-in). */
+    requestUploadUrl: (meta: { name: string; size: number; contentType: string }) =>
+      post<UploadUrlResponse>('/api/uc/uploads/request-url', meta),
+
+    /** Admin: list team-uploaded media for a product. */
+    getProductMediaAdmin: (productId: number) =>
+      get<UCProductMediaRow[]>(`/api/uc/admin/products/${productId}/media`),
+    /** Admin: attach an uploaded photo/video to a product. */
+    addProductMediaAdmin: (productId: number, data: {
+      url: string; type: 'photo' | 'video'; alt?: string; position?: number;
+    }) => post<UCProductMediaRow>(`/api/uc/admin/products/${productId}/media`, data),
+    /** Admin: remove a team-uploaded media row. */
+    deleteProductMediaAdmin: async (mediaId: number): Promise<{ ok: boolean }> => {
+      const res = await fetch(`${getBase()}/api/uc/admin/media/${mediaId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error || `${res.status}`);
+      }
+      return res.json() as Promise<{ ok: boolean }>;
+    },
 
     /** Send a message to the UC AI water quality assistant. */
     waterAiChat: (

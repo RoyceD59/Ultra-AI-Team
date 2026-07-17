@@ -41,7 +41,9 @@ A project management app for a small B2B SaaS team: track tasks, assign owners, 
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- UC Companion media uploads: presigned-URL flow in `artifacts/api-server/src/routes/storage.ts`; attach-time size/type verification + reviews/product-media/admin endpoints in `artifacts/api-server/src/routes/uc.ts`.
+- Ultra Clear brand assets: hi-res cropped logo lock-ups in `attached_assets/brand/`; the app renders them via `artifacts/uc-companion/components/BrandLogo.tsx`.
+- UC DB schema: `lib/db/src/schema/uc-*.ts` (users, tickets, water tests, reviews, product media).
 
 ## Architecture decisions
 
@@ -57,7 +59,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- After changing `lib/db` schema: run `pnpm --filter @workspace/db run push` **and** `pnpm exec tsc -b lib/db` (the package has no build script; project references need the manual rebuild) before typechecking/starting the API.
+- UC admin access is DB-anchored: a registered `uc_users` row with `is_admin=true`, or a registered user whose email is in the `UC_ADMIN_EMAILS` env var. The dev-only mock login (unknown email + any 6+ char password) is disabled in production.
 
 ## Pointers
 

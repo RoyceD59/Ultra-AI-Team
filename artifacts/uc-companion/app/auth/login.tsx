@@ -5,6 +5,7 @@ import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
+import BrandLogo from '@/components/BrandLogo';
 
 export default function LoginScreen() {
   const colors = useColors();
@@ -31,10 +32,7 @@ export default function LoginScreen() {
         contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
         {/* Brand */}
-        <View style={[styles.logoWrap, { backgroundColor: colors.primary }]}>
-          <Ionicons name="water" size={36} color="#fff" />
-        </View>
-        <Text style={[styles.brandName, { color: colors.text }]}>Ultra-Clear</Text>
+        <BrandLogo width={104} style={{ marginBottom: 4 }} />
         <Text style={[styles.brandSub, { color: colors.mutedForeground }]}>Sign in to your account</Text>
 
         {/* Form */}
@@ -85,8 +83,6 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: { padding: 32, alignItems: 'center', gap: 8, paddingTop: Platform.OS === 'web' ? 100 : 60 },
-  logoWrap: { width: 72, height: 72, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  brandName: { fontSize: 28, fontWeight: '800' as const },
   brandSub: { fontSize: 15, marginBottom: 16 },
   form: { width: '100%', gap: 16 },
   field: { gap: 6 },

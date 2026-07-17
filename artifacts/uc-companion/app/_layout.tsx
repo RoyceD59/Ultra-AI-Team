@@ -62,6 +62,9 @@ function RootLayoutNav() {
       <Stack.Screen name="checkout" options={{ title: 'Checkout' }} />
       <Stack.Screen name="order/[id]" options={{ title: 'Order Details' }} />
       <Stack.Screen name="ticket/new" options={{ title: 'New Ticket' }} />
+      <Stack.Screen name="review/new" options={{ title: 'Write a Review' }} />
+      <Stack.Screen name="review/list" options={{ title: 'Reviews' }} />
+      <Stack.Screen name="admin/product-media" options={{ title: 'Product Media' }} />
       <Stack.Screen name="water-test" options={{ title: 'Water Test Request' }} />
       <Stack.Screen name="auth/login" options={{ title: '', headerTransparent: true }} />
       <Stack.Screen name="auth/register" options={{ title: '', headerTransparent: true }} />

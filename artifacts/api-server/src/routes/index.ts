@@ -9,6 +9,7 @@ import aiMonitorRouter from "./ai/monitor";
 import aiAgentQueryRouter from "./ai/agent-query";
 import ucRouter from "./uc";
 import ucWaterChatRouter from "./uc-water-chat";
+import storageRouter from "./storage";
 import paymentsRouter from "./payments";
 import referralsRouter from "./referrals";
 
@@ -24,6 +25,7 @@ router.use(aiMonitorRouter);
 router.use(aiAgentQueryRouter);
 router.use(ucRouter);
 router.use(ucWaterChatRouter);
+router.use(storageRouter);
 router.use(paymentsRouter);
 router.use(referralsRouter);
 

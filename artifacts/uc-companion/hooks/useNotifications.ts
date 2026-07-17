@@ -152,9 +152,11 @@ export const FILTER_PRODUCTS: Array<{
   { id: 4,  name: 'Flex',                    lifespanDays:  90, icon: 'water-outline'      },
   { id: 5,  name: 'Timbo',                   lifespanDays:  90, icon: 'water-outline'      },
   { id: 6,  name: 'Gym Buddy',               lifespanDays:  90, icon: 'water-outline'      },
-  { id: 7,  name: 'Survivor Straw',          lifespanDays:  90, icon: 'funnel-outline'     },
+  // Survivor Straw & EcoSmart Elite lifespans are unconfirmed in the catalogue
+  // — conservative 180-day estimates (keep in sync with API MOCK_PRODUCTS).
+  { id: 7,  name: 'Survivor Straw',          lifespanDays: 180, icon: 'funnel-outline'     },
   { id: 8,  name: 'Breeze',                  lifespanDays:  90, icon: 'water-outline'      },
-  { id: 9,  name: 'EcoSmart Elite',          lifespanDays: 120, icon: 'flash-outline'      },
+  { id: 9,  name: 'EcoSmart Elite',          lifespanDays: 180, icon: 'flash-outline'      },
   // Segment 02 · Home Water Filters
   { id: 11, name: 'Sweet Home',              lifespanDays: 120, icon: 'home-outline'       },
   { id: 12, name: 'Counter Reverse Osmosis', lifespanDays: 180, icon: 'layers-outline'     },

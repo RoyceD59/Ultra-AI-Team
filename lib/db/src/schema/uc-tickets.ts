@@ -10,6 +10,7 @@ export const ucTicketsTable = pgTable("uc_tickets", {
   issueDescription:     text("issue_description").notNull(),
   preferredContactTime: text("preferred_contact_time").notNull().default("Any time"),
   photos:               json("photos").$type<string[]>().default([]),
+  videos:               json("videos").$type<string[]>().default([]),
   status:               text("status").notNull().default("submitted"),
   createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -7,6 +7,7 @@ import { useApi } from '@/hooks/useApi';
 import { useAuth } from '@/context/AuthContext';
 import * as Haptics from 'expo-haptics';
 import MediaPicker, { MediaItem } from '@/components/MediaPicker';
+import { uploadMediaItems } from '@/lib/uploadMedia';
 
 const WATER_SOURCES = ['Municipal/Tap', 'Borehole', 'Well', 'Rainwater', 'River/Lake', 'Tanker delivery'];
 const CONCERNS = ['Bad taste or odor', 'Discolouration', 'Hardness / scale buildup', 'Skin irritation', 'Gastrointestinal issues', 'General safety check'];
@@ -15,7 +16,7 @@ export default function WaterTestScreen() {
   const colors = useColors();
   const router = useRouter();
   const api = useApi();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [name, setName] = useState(user ? `${user.firstName} ${user.lastName}` : '');
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
@@ -37,20 +38,28 @@ export default function WaterTestScreen() {
       Alert.alert('Required fields', 'Please fill in name, address, phone, and water source.');
       return;
     }
+    if (media.length > 0 && !token) {
+      Alert.alert(
+        'Sign in to attach media',
+        'Photos and videos can only be uploaded from an account. Sign in, or remove the attachments to continue.',
+      );
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
-      const photos = media.filter(m => m.type === 'photo').map(m => m.uri);
-      const videos = media.filter(m => m.type === 'video').map(m => m.uri);
+      // Upload to object storage first — the API stores permanent URLs,
+      // not device-local file paths.
+      const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
       await api.createWaterTest({
         name, address, phone, waterSource,
         concerns: [...selectedConcerns, extraConcerns].filter(Boolean).join(', '),
-        photos,
-        videos,
+        photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
+        videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
       });
       setSubmitted(true);
-    } catch {
-      Alert.alert('Error', 'Submission failed. Please try again.');
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Submission failed. Please try again.');
     } finally { setSubmitting(false); }
   }
 
