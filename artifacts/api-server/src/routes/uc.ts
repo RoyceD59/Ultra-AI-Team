@@ -18,6 +18,7 @@ import {
   buildTicketConfirmationEmail,
   buildWaterTestConfirmationEmail,
 } from "../lib/email.js";
+import { sendViaResend } from "../lib/resend.js";
 import {
   db,
   ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable,
@@ -1830,33 +1831,22 @@ function escapeHtml(s: string): string {
 
 /**
  * Send a plain-text form-submission email to the office inbox (sales@ucfilters.com).
- * Prefers the Resend API when RESEND_API_KEY is set; falls back to the
- * SendGrid/SMTP chain in lib/email when Resend is unconfigured or returns an
- * error. Fire-and-forget — never throws. Logs only the subject/request id,
+ * Prefers Resend (Replit connector, or direct API when RESEND_API_KEY /
+ * RESEND_BASE_URL is set); falls back to the SendGrid/SMTP chain in lib/email
+ * when Resend delivery fails. Fire-and-forget — never throws. Logs only the subject/request id,
  * never the form payload (it contains customer PII; the submission itself is
  * already persisted in the database).
  */
 export async function notifyOffice(subject: string, lines: string[]): Promise<void> {
   const text = lines.join("\n");
-  const apiKey = process.env["RESEND_API_KEY"];
-  if (apiKey) {
-    try {
-      const resp = await fetch(`${process.env["RESEND_BASE_URL"] ?? "https://api.resend.com"}/emails`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          from: "Ultra Clear App <noreply@ucfilters.com>",
-          to: OFFICE_EMAIL,
-          subject,
-          text,
-        }),
-      });
-      if (resp.ok) return;
-      console.error(`[office-notify] Resend responded ${resp.status} for "${subject}" — falling back to SendGrid/SMTP`);
-    } catch (err) {
-      console.error(`[office-notify] Resend failed for "${subject}" — falling back to SendGrid/SMTP:`, err instanceof Error ? err.message : err);
-    }
-  }
+  const sent = await sendViaResend({
+    from: "Ultra Clear App <noreply@contacts.ucfilters.com>",
+    to: OFFICE_EMAIL,
+    subject,
+    text,
+  });
+  if (sent) return;
+  console.error(`[office-notify] Resend unavailable for "${subject}" — falling back to SendGrid/SMTP`);
   try {
     await sendEmail({
       to: OFFICE_EMAIL,
@@ -1870,9 +1860,9 @@ export async function notifyOffice(subject: string, lines: string[]): Promise<vo
 }
 
 /**
- * Send a plain-text notification email to info@ucfilters.com via the Resend API.
- * No-ops when RESEND_API_KEY is absent — falls back to a console log so the
- * team can see the submission in server logs.
+ * Send a plain-text notification email to info@ucfilters.com via Resend
+ * (Replit connector or direct API). Fire-and-forget — the submission itself
+ * is persisted in the database regardless of email delivery.
  */
 async function sendEnquiryEmail(enquiry: {
   productName: string;
@@ -1881,30 +1871,39 @@ async function sendEnquiryEmail(enquiry: {
   phone: string;
   message: string;
 }): Promise<void> {
-  const apiKey = process.env["RESEND_API_KEY"];
-  if (!apiKey) {
-    console.info("[enquiry] No RESEND_API_KEY — logging submission:", enquiry);
-    return;
-  }
+  const sent = await sendViaResend({
+    from: "Ultra Clear App <noreply@contacts.ucfilters.com>",
+    to: "info@ucfilters.com",
+    subject: `New Enquiry: ${enquiry.productName}`,
+    text: [
+      `Product: ${enquiry.productName}`,
+      `Name:    ${enquiry.name}`,
+      `Email:   ${enquiry.email}`,
+      `Phone:   ${enquiry.phone}`,
+      "",
+      enquiry.message,
+    ].join("\n"),
+  });
+  if (sent) return;
+  console.error(`[enquiry] Resend unavailable for "${enquiry.productName}" — falling back to SendGrid/SMTP`);
   try {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        from: "Ultra Clear App <noreply@ucfilters.com>",
-        to: "info@ucfilters.com",
-        subject: `New Enquiry: ${enquiry.productName}`,
-        text: [
-          `Product: ${enquiry.productName}`,
-          `Name:    ${enquiry.name}`,
-          `Email:   ${enquiry.email}`,
-          `Phone:   ${enquiry.phone}`,
-          "",
-          enquiry.message,
-        ].join("\n"),
-      }),
+    const text = [
+      `Product: ${enquiry.productName}`,
+      `Name:    ${enquiry.name}`,
+      `Email:   ${enquiry.email}`,
+      `Phone:   ${enquiry.phone}`,
+      "",
+      enquiry.message,
+    ].join("\n");
+    await sendEmail({
+      to: "info@ucfilters.com",
+      subject: `New Enquiry: ${enquiry.productName}`,
+      text,
+      html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
     });
-  } catch { /* fire-and-forget — never block the response */ }
+  } catch (err) {
+    console.error(`[enquiry] email failed for "${enquiry.productName}":`, err instanceof Error ? err.message : err);
+  }
 }
 
 /** In-memory fallback when the DB insert fails (e.g. table not yet created). */
