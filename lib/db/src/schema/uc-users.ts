@@ -1,0 +1,18 @@
+import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+
+/**
+ * Stores registered Ultra-Clear Companion user accounts.
+ * Passwords are stored as bcrypt hashes — never plaintext.
+ * The `id` serial becomes the JWT `sub` (subject) on login.
+ */
+export const ucUsersTable = pgTable("uc_users", {
+  id:           serial("id").primaryKey(),
+  email:        text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  phone:        text("phone").notNull().default(""),
+  firstName:    text("first_name").notNull(),
+  lastName:     text("last_name").notNull().default(""),
+  createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type UcUser = typeof ucUsersTable.$inferSelect;

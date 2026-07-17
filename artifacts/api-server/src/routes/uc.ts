@@ -5,8 +5,13 @@ import {
   registerReferralAtSignup,
 } from "./referrals";
 import { issueToken, verifyToken } from "../lib/jwt.js";
-import { db, ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  db,
+  ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable,
+  ucUsersTable, ucOrdersTable, ucOrderItemsTable, ucTicketsTable, ucWaterTestsTable,
+} from "@workspace/db";
+import { eq, desc, inArray } from "drizzle-orm";
+import bcryptjs from "bcryptjs";
 
 const router = Router();
 
@@ -381,9 +386,11 @@ const MOCK_LOCATIONS = [
   { id: "loc7", type: "refill_atm", name: "Water ATM – Junction Mall", address: "Junction Mall, Ngong Rd, Nairobi", lat: -1.3003, lng: 36.7773, hours: "7am–9pm daily", phone: null },
 ];
 
-const ticketStore: Record<string, unknown>[] = [];
-const waterTestStore: Record<string, unknown>[] = [];
-const orderStore: Record<string, unknown>[] = [];
+// In-memory stores removed — all data now persists in PostgreSQL.
+// Fallback arrays used only when the DB is temporarily unavailable.
+const orderStoreFallback:  Record<string, unknown>[] = [];
+const ticketStoreFallback: Record<string, unknown>[] = [];
+const waterTestStoreFallback: Record<string, unknown>[] = [];
 
 // ─── WooCommerce helpers ──────────────────────────────────────────────────────
 function hasWCCredentials(): boolean {
@@ -570,17 +577,37 @@ router.post("/uc/auth/login", async (req: Request, res: Response): Promise<void>
     }
   } catch { /* fall through to mock */ }
 
-  if (email && password.length >= 6) {
-    const name = email.split("@")[0] ?? "customer";
-    const mockUser = {
-      id:        Date.now(),
-      email,
-      phone:     "",   // not collected at login; populated from the stored account
-      firstName: name.charAt(0).toUpperCase() + name.slice(1),
-      lastName:  "Customer",
-    };
-    res.json({ token: issueToken(mockUser), user: mockUser });
-    return;
+  // WooCommerce auth failed or credentials absent — try our own DB
+  if (email && password) {
+    try {
+      const dbUser = await db.query.ucUsersTable.findFirst({
+        where: eq(ucUsersTable.email, email.toLowerCase().trim()),
+      });
+      if (dbUser) {
+        const match = await bcryptjs.compare(password, dbUser.passwordHash);
+        if (!match) {
+          res.status(401).json({ error: "Invalid credentials" });
+          return;
+        }
+        const user = { id: dbUser.id, email: dbUser.email, phone: dbUser.phone, firstName: dbUser.firstName, lastName: dbUser.lastName };
+        res.json({ token: issueToken(user), user });
+        return;
+      }
+    } catch { /* DB unavailable — fall through to ephemeral session */ }
+
+    // No DB record: allow login if password is >= 6 chars (dev / new-install mode)
+    if (password.length >= 6) {
+      const name = email.split("@")[0] ?? "customer";
+      const mockUser = {
+        id:        Date.now(),
+        email,
+        phone:     "",
+        firstName: name.charAt(0).toUpperCase() + name.slice(1),
+        lastName:  "Customer",
+      };
+      res.json({ token: issueToken(mockUser), user: mockUser });
+      return;
+    }
   }
   res.status(401).json({ error: "Invalid credentials" });
 });
@@ -598,29 +625,82 @@ router.post("/uc/auth/register", async (req: Request, res: Response): Promise<vo
     res.status(400).json({ error: "First name, email, phone number and password are required" });
     return;
   }
+  if (password.length < 6) {
+    res.status(400).json({ error: "Password must be at least 6 characters" });
+    return;
+  }
   // Basic phone sanity check — must start with + and contain 10-15 digits
-  if (!/^\+\d{10,15}$/.test(phone.replace(/\s/g, ""))) {
+  const cleanPhone = phone.replace(/\s/g, "");
+  if (!/^\+\d{10,15}$/.test(cleanPhone)) {
     res.status(400).json({ error: "Enter a valid phone number in international format, e.g. +254712345678" });
     return;
   }
-  const user = { id: Date.now(), email, phone: phone.replace(/\s/g, ""), firstName, lastName: lastName ?? "" };
-  // Store referral association so first-order discount can be applied later
-  if (referralCode?.trim()) {
-    registerReferralAtSignup(email, referralCode.trim());
+  try {
+    // Check for duplicate email
+    const existing = await db.query.ucUsersTable.findFirst({ where: eq(ucUsersTable.email, email.toLowerCase().trim()) }).catch(() => null);
+    if (existing) {
+      res.status(409).json({ error: "An account with this email already exists" });
+      return;
+    }
+    const passwordHash = await bcryptjs.hash(password, 10);
+    const [dbUser] = await db.insert(ucUsersTable).values({
+      email:    email.toLowerCase().trim(),
+      passwordHash,
+      phone:    cleanPhone,
+      firstName,
+      lastName: lastName ?? "",
+    }).returning();
+    const user = { id: dbUser!.id, email: dbUser!.email, phone: dbUser!.phone, firstName: dbUser!.firstName, lastName: dbUser!.lastName };
+    // Store referral association so first-order discount can be applied later
+    if (referralCode?.trim()) {
+      registerReferralAtSignup(email, referralCode.trim());
+    }
+    res.json({ token: issueToken(user), user });
+  } catch (err) {
+    // Fallback: if DB is unavailable, issue a session-only token (not persisted)
+    console.error("[register] DB error, issuing ephemeral token:", err);
+    const user = { id: Date.now(), email, phone: cleanPhone, firstName, lastName: lastName ?? "" };
+    if (referralCode?.trim()) registerReferralAtSignup(email, referralCode.trim());
+    res.json({ token: issueToken(user), user });
   }
-  // Issue a signed JWT (HS256 with SESSION_SECRET)
-  res.json({ token: issueToken(user), user });
 });
 
 // ─── Customer ─────────────────────────────────────────────────────────────────
-router.get("/uc/customer/profile", (_req: Request, res: Response): void => {
+router.get("/uc/customer/profile", async (req: Request, res: Response): Promise<void> => {
+  const claims = verifyToken(req.headers["authorization"]);
+  if (!claims) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  // Try to look up the real user record from the DB
+  try {
+    const numericId = Number(claims.id);
+    if (!isNaN(numericId) && numericId > 0 && numericId < 1_000_000_000) {
+      // Looks like a real serial DB id (not a timestamp)
+      const dbUser = await db.query.ucUsersTable.findFirst({ where: eq(ucUsersTable.id, numericId) });
+      if (dbUser) {
+        res.json({
+          id: dbUser.id,
+          email: dbUser.email,
+          phone: dbUser.phone,
+          firstName: dbUser.firstName,
+          lastName: dbUser.lastName,
+          billing:  { firstName: dbUser.firstName, lastName: dbUser.lastName, city: "Nairobi", country: "KE", phone: dbUser.phone },
+          shipping: { firstName: dbUser.firstName, lastName: dbUser.lastName, city: "Nairobi", country: "KE", phone: dbUser.phone },
+        });
+        return;
+      }
+    }
+  } catch { /* fall through */ }
+  // Fallback: return whatever the JWT carries (for mock/legacy logins)
   res.json({
-    id: 1,
-    email: "customer@example.com",
-    firstName: "Jane",
-    lastName: "Doe",
-    billing: { firstName: "Jane", lastName: "Doe", address1: "123 Westlands Rd", address2: "", city: "Nairobi", country: "KE", phone: "+254700000000" },
-    shipping: { firstName: "Jane", lastName: "Doe", address1: "123 Westlands Rd", address2: "", city: "Nairobi", country: "KE", phone: "+254700000000" },
+    id:        claims.id,
+    email:     claims.email,
+    firstName: claims.firstName ?? "",
+    lastName:  claims.lastName  ?? "",
+    phone:     "",
+    billing:   { firstName: claims.firstName ?? "", lastName: claims.lastName ?? "", city: "Nairobi", country: "KE", phone: "" },
+    shipping:  { firstName: claims.firstName ?? "", lastName: claims.lastName ?? "", city: "Nairobi", country: "KE", phone: "" },
   });
 });
 
@@ -711,7 +791,8 @@ async function verifyPaymentOnServer(
 }
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
-router.get("/uc/orders", async (_req: Request, res: Response): Promise<void> => {
+router.get("/uc/orders", async (req: Request, res: Response): Promise<void> => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
   try {
     if (hasWCCredentials()) {
       const orders = await wcFetchArray("/orders", { per_page: "20", orderby: "date", order: "desc" });
@@ -720,9 +801,41 @@ router.get("/uc/orders", async (_req: Request, res: Response): Promise<void> => 
         return;
       }
     }
-    res.json(orderStore);
+    // DB path: fetch this user's orders with their line items
+    const orders = await db.select().from(ucOrdersTable)
+      .where(eq(ucOrdersTable.userId, userId))
+      .orderBy(desc(ucOrdersTable.dateCreated));
+    if (orders.length === 0) {
+      res.json([]);
+      return;
+    }
+    const orderIds = orders.map(o => o.id);
+    const items = await db.select().from(ucOrderItemsTable)
+      .where(inArray(ucOrderItemsTable.orderId, orderIds));
+    const itemsByOrder = items.reduce<Record<number, typeof items>>((acc, item) => {
+      (acc[item.orderId] ??= []).push(item);
+      return acc;
+    }, {});
+    res.json(orders.map(o => ({
+      id:              o.id,
+      status:          o.status,
+      dateCreated:     o.dateCreated,
+      total:           o.total,
+      currency:        o.currency,
+      paymentMethod:   o.paymentMethod,
+      shippingAddress: o.shippingAddress ?? {},
+      discountPercent: o.discountPercent,
+      discountAmount:  o.discountAmount,
+      promoCode:       o.promoCode ?? "",
+      lineItems:       (itemsByOrder[o.id] ?? []).map(i => ({
+        productId: i.productId,
+        name:      i.name,
+        quantity:  i.quantity,
+        total:     i.total,
+      })),
+    })));
   } catch {
-    res.json(orderStore);
+    res.json(orderStoreFallback.filter(o => (o as Record<string,unknown>)["userId"] === userId));
   }
 });
 
@@ -913,38 +1026,95 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
     }
   } catch { /* fall through to mock */ }
 
-  const newOrder = {
-    id: Date.now(),
-    status: paymentMethod === "cod" ? "pending" : "processing",
-    dateCreated: new Date().toISOString(),
-    total: String(netTotal),
-    currency: "KES",
-    lineItems: productLines.map(({ productId, name, quantity, subtotal: t }) => ({
-      productId, name, quantity, total: String(t),
-    })),
-    paymentMethod,
-    shippingAddress: shippingAddress ?? {},
-    discountPercent,
-    discountAmount,
-    promoCode: promoCode ?? "",
-  };
-  orderStore.push(newOrder);
+  // Persist order to DB
+  try {
+    const [dbOrder] = await db.insert(ucOrdersTable).values({
+      userId:           orderUserId,
+      status:           paymentMethod === "cod" ? "pending" : "processing",
+      total:            String(netTotal),
+      currency:         "KES",
+      paymentMethod,
+      paymentReference: paymentReference ?? "",
+      promoCode:        promoCode ?? "",
+      discountPercent,
+      discountAmount,
+      shippingAddress:  shippingAddress ?? {},
+    }).returning();
 
-  // Record referral conversion so the referrer earns credit
-  if (discountType === "referral" && promoCode && userEmail) {
-    recordReferralConversion(promoCode, userEmail);
+    if (dbOrder && productLines.length > 0) {
+      await db.insert(ucOrderItemsTable).values(
+        productLines.map(({ productId, name, quantity, subtotal: t }) => ({
+          orderId:   dbOrder.id,
+          productId,
+          name,
+          quantity,
+          total:     String(t),
+        }))
+      );
+    }
+
+    // Record referral conversion so the referrer earns credit
+    if (discountType === "referral" && promoCode && userEmail) {
+      recordReferralConversion(promoCode, userEmail);
+    }
+
+    const newOrder = {
+      id:              dbOrder!.id,
+      status:          dbOrder!.status,
+      dateCreated:     dbOrder!.dateCreated,
+      total:           dbOrder!.total,
+      currency:        dbOrder!.currency,
+      paymentMethod:   dbOrder!.paymentMethod,
+      shippingAddress: dbOrder!.shippingAddress ?? {},
+      discountPercent,
+      discountAmount,
+      promoCode:       promoCode ?? "",
+      lineItems:       productLines.map(({ productId, name, quantity, subtotal: t }) => ({
+        productId, name, quantity, total: String(t),
+      })),
+    };
+
+    sendPushToUser(
+      orderUserId,
+      "✅ Order confirmed!",
+      `Your order #${newOrder.id} is placed and being processed.`,
+      { screen: "orders", orderId: String(newOrder.id) },
+      "orders"
+    );
+
+    res.json(newOrder);
+  } catch (dbErr) {
+    // DB unavailable — fall back to in-memory so the order is not lost in the response
+    console.error("[orders] DB insert failed, using fallback:", dbErr);
+    const fallbackOrder = {
+      id:          Date.now(),
+      status:      paymentMethod === "cod" ? "pending" : "processing",
+      dateCreated: new Date().toISOString(),
+      total:       String(netTotal),
+      currency:    "KES",
+      userId:      orderUserId,
+      lineItems:   productLines.map(({ productId, name, quantity, subtotal: t }) => ({
+        productId, name, quantity, total: String(t),
+      })),
+      paymentMethod,
+      shippingAddress: shippingAddress ?? {},
+      discountPercent,
+      discountAmount,
+      promoCode:   promoCode ?? "",
+    };
+    orderStoreFallback.push(fallbackOrder);
+    if (discountType === "referral" && promoCode && userEmail) {
+      recordReferralConversion(promoCode, userEmail);
+    }
+    sendPushToUser(
+      orderUserId,
+      "✅ Order confirmed!",
+      `Your order #${fallbackOrder.id} is placed and being processed.`,
+      { screen: "orders", orderId: String(fallbackOrder.id) },
+      "orders"
+    );
+    res.json(fallbackOrder);
   }
-
-  // Server-side push notification: order confirmed (fire-and-forget)
-  sendPushToUser(
-    orderUserId,
-    "✅ Order confirmed!",
-    `Your order #${newOrder.id} is placed and being processed.`,
-    { screen: "orders", orderId: String(newOrder.id) },
-    "orders"
-  );
-
-  res.json(newOrder);
 });
 
 // ─── Push notification endpoints ─────────────────────────────────────────────
@@ -1173,11 +1343,20 @@ router.get("/uc/locations", (_req: Request, res: Response): void => {
 });
 
 // ─── Tickets ──────────────────────────────────────────────────────────────────
-router.get("/uc/tickets", (_req: Request, res: Response): void => {
-  res.json(ticketStore);
+router.get("/uc/tickets", async (req: Request, res: Response): Promise<void> => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
+  try {
+    const tickets = await db.select().from(ucTicketsTable)
+      .where(eq(ucTicketsTable.userId, userId))
+      .orderBy(desc(ucTicketsTable.createdAt));
+    res.json(tickets);
+  } catch {
+    res.json(ticketStoreFallback.filter(t => (t as Record<string,unknown>)["userId"] === userId));
+  }
 });
 
-router.post("/uc/tickets", (req: Request, res: Response): void => {
+router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
   const { productModel, issueDescription, preferredContactTime, photos } = req.body as {
     productModel?: string;
     issueDescription?: string;
@@ -1188,21 +1367,34 @@ router.post("/uc/tickets", (req: Request, res: Response): void => {
     res.status(400).json({ error: "Required fields missing" });
     return;
   }
-  const ticket = {
-    id: `TKT-${Date.now()}`,
-    productModel,
-    issueDescription,
-    preferredContactTime: preferredContactTime ?? "Any time",
-    photos: photos ?? [],
-    status: "submitted",
-    createdAt: new Date().toISOString(),
-  };
-  ticketStore.push(ticket);
-  res.status(201).json(ticket);
+  const id = `TKT-${Date.now()}`;
+  try {
+    const [ticket] = await db.insert(ucTicketsTable).values({
+      id,
+      userId,
+      productModel,
+      issueDescription,
+      preferredContactTime: preferredContactTime ?? "Any time",
+      photos: photos ?? [],
+    }).returning();
+    res.status(201).json(ticket);
+  } catch (err) {
+    console.error("[tickets] DB insert failed, using fallback:", err);
+    const fallback = {
+      id, userId, productModel, issueDescription,
+      preferredContactTime: preferredContactTime ?? "Any time",
+      photos: photos ?? [],
+      status: "submitted",
+      createdAt: new Date().toISOString(),
+    };
+    ticketStoreFallback.push(fallback);
+    res.status(201).json(fallback);
+  }
 });
 
 // ─── Water Tests ──────────────────────────────────────────────────────────────
-router.post("/uc/water-tests", (req: Request, res: Response): void => {
+router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void> => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
   const { name, address, phone, waterSource, concerns } = req.body as {
     name?: string;
     address?: string;
@@ -1214,18 +1406,30 @@ router.post("/uc/water-tests", (req: Request, res: Response): void => {
     res.status(400).json({ error: "Required fields missing" });
     return;
   }
-  const wt = {
-    id: `WT-${Date.now()}`,
-    name,
-    address,
-    phone,
-    waterSource: waterSource ?? "Municipal",
-    concerns: concerns ?? "",
-    status: "pending",
-    createdAt: new Date().toISOString(),
-  };
-  waterTestStore.push(wt);
-  res.status(201).json(wt);
+  const id = `WT-${Date.now()}`;
+  try {
+    const [wt] = await db.insert(ucWaterTestsTable).values({
+      id,
+      userId,
+      name,
+      address,
+      phone,
+      waterSource: waterSource ?? "Municipal",
+      concerns:    concerns ?? "",
+    }).returning();
+    res.status(201).json(wt);
+  } catch (err) {
+    console.error("[water-tests] DB insert failed, using fallback:", err);
+    const fallback = {
+      id, userId, name, address, phone,
+      waterSource: waterSource ?? "Municipal",
+      concerns:    concerns ?? "",
+      status:      "pending",
+      createdAt:   new Date().toISOString(),
+    };
+    waterTestStoreFallback.push(fallback);
+    res.status(201).json(fallback);
+  }
 });
 
 export default router;
