@@ -256,5 +256,17 @@ export function useApi() {
       phone: string;
       message: string;
     }) => post<{ ok: boolean; message: string }>('/api/uc/enquiries', data),
+
+    /** Send a message to the UC AI water quality assistant. */
+    waterAiChat: (
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+      filterContext?: {
+        productName?:   string;
+        daysRemaining?: number;
+        waterSource?:   string;
+        lastCheckIn?:   string;
+        cleanCount?:    number;
+      },
+    ) => post<{ reply: string }>('/api/uc/ai/water-chat', { messages, filterContext }),
   };
 }

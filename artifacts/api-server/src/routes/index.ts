@@ -8,6 +8,7 @@ import anthropicRouter from "./anthropic/conversations";
 import aiMonitorRouter from "./ai/monitor";
 import aiAgentQueryRouter from "./ai/agent-query";
 import ucRouter from "./uc";
+import ucWaterChatRouter from "./uc-water-chat";
 import paymentsRouter from "./payments";
 import referralsRouter from "./referrals";
 
@@ -22,6 +23,7 @@ router.use(anthropicRouter);
 router.use(aiMonitorRouter);
 router.use(aiAgentQueryRouter);
 router.use(ucRouter);
+router.use(ucWaterChatRouter);
 router.use(paymentsRouter);
 router.use(referralsRouter);
 

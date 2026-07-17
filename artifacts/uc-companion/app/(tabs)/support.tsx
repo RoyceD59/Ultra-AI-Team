@@ -23,6 +23,34 @@ const GUIDES = [
 const TABS = ['Guides', 'My Tickets', 'Water Test'];
 const topPad = Platform.OS === 'web' ? 67 : 0;
 
+// ─── AI banner shown at top of Guides tab ─────────────────────────────────────
+function AiBanner({ onPress, colors }: { onPress: () => void; colors: ReturnType<typeof import('@/hooks/useColors').useColors> }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[aiBannerStyles.wrap, { backgroundColor: colors.primaryLight, borderColor: colors.primary + '40' }]}>
+      <View style={[aiBannerStyles.iconWrap, { backgroundColor: colors.primary }]}>
+        <Ionicons name="water" size={18} color="#fff" />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[aiBannerStyles.title, { color: colors.text }]}>Ask AI — Water Assistant</Text>
+        <Text style={[aiBannerStyles.sub, { color: colors.mutedForeground }]}>
+          Get instant answers about your filter, water quality, and Nairobi water
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+    </TouchableOpacity>
+  );
+}
+
+const aiBannerStyles = StyleSheet.create({
+  wrap:    { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 16, marginTop: 14, borderRadius: 14, borderWidth: 1, padding: 14 },
+  iconWrap:{ width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  title:   { fontSize: 14, fontWeight: '700' as const },
+  sub:     { fontSize: 12, marginTop: 2, lineHeight: 17 },
+});
+
 export default function SupportScreen() {
   const colors = useColors();
   const router = useRouter();
@@ -56,6 +84,7 @@ export default function SupportScreen() {
       {/* Guides */}
       {tab === 0 && (
         <>
+          <AiBanner colors={colors} onPress={() => router.push('/ai-chat' as never)} />
           <View style={[styles.searchBar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Ionicons name="search-outline" size={16} color={colors.mutedForeground} />
             <TextInput value={search} onChangeText={setSearch}

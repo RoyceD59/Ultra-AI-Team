@@ -199,6 +199,31 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
                 </TouchableOpacity>
               )}
 
+              {/* Ask AI link — shown whenever the filter is registered */}
+              <TouchableOpacity
+                onPress={() => {
+                  router.push({
+                    pathname: '/ai-chat',
+                    params: {
+                      productName:   activation.productName,
+                      daysRemaining: String(effDaysLeft ?? 0),
+                      waterSource:   activation.lastWaterSource ?? '',
+                      lastCheckIn:   lastRec
+                        ? { good: 'Performing well', clean: 'Clean recommended', replace: 'Replace now' }[lastRec]
+                        : '',
+                      cleanCount:    String(activation.cleanCount ?? 0),
+                    },
+                  } as never);
+                }}
+                activeOpacity={0.75}
+                style={styles.askAiRow}>
+                <Ionicons name="water-outline" size={13} color={colors.primary} />
+                <Text style={[styles.askAiText, { color: colors.primary }]}>
+                  Ask AI about my {activation.productName}
+                </Text>
+                <Ionicons name="chevron-forward" size={12} color={colors.primary} />
+              </TouchableOpacity>
+
               {/* Divider + notification summary */}
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
               <View style={styles.row}>
@@ -433,6 +458,8 @@ const styles = StyleSheet.create({
   checkPerfBtnText:{ flex: 1, fontSize: 12, fontWeight: '600' as const },
   effWarning:      { flexDirection: 'row' as const, alignItems: 'flex-start' as const, gap: 6, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   effWarningText:  { flex: 1, fontSize: 11, lineHeight: 16 },
+  askAiRow:        { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 5, paddingVertical: 2 },
+  askAiText:       { flex: 1, fontSize: 12, fontWeight: '500' as const },
 
   // Modal
   overlay:         { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
