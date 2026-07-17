@@ -19,6 +19,17 @@ A project management app for a small B2B SaaS team: track tasks, assign owners, 
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
 
+## Optional integrations (set env vars to activate)
+
+| Service | Env vars | Purpose |
+|---------|----------|---------|
+| Africa's Talking (SMS) | `AT_API_KEY`, `AT_USERNAME` | Order, ticket, and water-test SMS confirmations. Sandbox: username=`sandbox`, key from AT dashboard. No-op when absent. |
+| SendGrid (email) | `SENDGRID_API_KEY` | HTML order receipt emails. No-op when absent. |
+| SMTP relay (email) | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Alternative to SendGrid (e.g. smtp2go, Gmail SMTP). Used only when SendGrid key absent. Requires `nodemailer` installed. |
+| Email from address | `EMAIL_FROM` | Sender display name + address (default: `Ultra Clear <noreply@ucfilters.co.ke>`). |
+| WooCommerce | `WC_BASE_URL`, `WC_CONSUMER_KEY`, `WC_CONSUMER_SECRET` | Live product catalogue and orders (falls back to mock when absent). |
+| M-Pesa | `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET` | Payment verification for M-Pesa orders. |
+
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9

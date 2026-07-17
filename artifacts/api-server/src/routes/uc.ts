@@ -6,6 +6,18 @@ import {
 } from "./referrals";
 import { issueToken, verifyToken } from "../lib/jwt.js";
 import {
+  sendSms,
+  orderConfirmationSms,
+  ticketConfirmationSms,
+  waterTestConfirmationSms,
+} from "../lib/sms.js";
+import {
+  sendEmail,
+  buildOrderReceiptEmail,
+  buildTicketConfirmationEmail,
+  buildWaterTestConfirmationEmail,
+} from "../lib/email.js";
+import {
   db,
   ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable,
   ucUsersTable, ucOrdersTable, ucOrderItemsTable, ucTicketsTable, ucWaterTestsTable,
@@ -992,6 +1004,25 @@ function sendPushToUser(
   }).catch(() => { /* ignore */ });
 }
 
+// ─── Contact lookup helper ────────────────────────────────────────────────────
+/** Look up phone, email, and firstName for a registered DB user. Returns null
+ *  for mock/legacy string ids (timestamps) or when the DB is unavailable. */
+async function getUserContact(
+  userId: string,
+): Promise<{ phone: string; email: string; firstName: string } | null> {
+  const numericId = Number(userId);
+  if (isNaN(numericId) || numericId <= 0 || numericId >= 1_000_000_000) return null;
+  try {
+    const row = await db.query.ucUsersTable.findFirst({
+      where: eq(ucUsersTable.id, numericId),
+    });
+    if (!row) return null;
+    return { phone: row.phone, email: row.email, firstName: row.firstName };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Orders ──────────────────────────────────────────────────────────────────
 router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => {
   // Capture the caller's identity up-front so we can send a push notification
@@ -1086,6 +1117,30 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           { screen: "orders", orderId: String(normalized["id"] ?? "") },
           "orders"
         );
+        // SMS + email confirmations (fire-and-forget)
+        getUserContact(orderUserId).then(contact => {
+          if (contact?.phone) {
+            sendSms(contact.phone, orderConfirmationSms({
+              orderId:   normalized["id"] as string | number,
+              total:     String(normalized["total"] ?? "0"),
+              firstName: contact.firstName,
+            }));
+          }
+          if (contact?.email) {
+            const li = (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [];
+            const receipt = buildOrderReceiptEmail({
+              orderId:         normalized["id"] as string | number,
+              firstName:       contact.firstName,
+              email:           contact.email,
+              lineItems:       li,
+              total:           String(normalized["total"] ?? "0"),
+              currency:        String(normalized["currency"] ?? "KES"),
+              paymentMethod:   String(normalized["paymentMethod"] ?? ""),
+              shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
+            });
+            sendEmail({ to: contact.email, ...receipt });
+          }
+        }).catch(() => {});
         res.json(normalized);
         return;
       }
@@ -1147,6 +1202,31 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       { screen: "orders", orderId: String(newOrder.id) },
       "orders"
     );
+    // SMS + email confirmations (fire-and-forget)
+    getUserContact(orderUserId).then(contact => {
+      if (contact?.phone) {
+        sendSms(contact.phone, orderConfirmationSms({
+          orderId:   newOrder.id,
+          total:     newOrder.total,
+          firstName: contact.firstName,
+        }));
+      }
+      if (contact?.email) {
+        const receipt = buildOrderReceiptEmail({
+          orderId:         newOrder.id,
+          firstName:       contact.firstName,
+          email:           contact.email,
+          lineItems:       newOrder.lineItems,
+          total:           newOrder.total,
+          currency:        newOrder.currency,
+          paymentMethod:   newOrder.paymentMethod,
+          shippingAddress: newOrder.shippingAddress as Record<string, string> | undefined,
+          discountAmount:  newOrder.discountAmount,
+          promoCode:       newOrder.promoCode,
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
 
     res.json(newOrder);
   } catch (dbErr) {
@@ -1179,6 +1259,31 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       { screen: "orders", orderId: String(fallbackOrder.id) },
       "orders"
     );
+    // SMS + email confirmations (fire-and-forget, fallback path)
+    getUserContact(orderUserId).then(contact => {
+      if (contact?.phone) {
+        sendSms(contact.phone, orderConfirmationSms({
+          orderId:   fallbackOrder.id,
+          total:     fallbackOrder.total,
+          firstName: contact.firstName,
+        }));
+      }
+      if (contact?.email) {
+        const receipt = buildOrderReceiptEmail({
+          orderId:         fallbackOrder.id,
+          firstName:       contact.firstName,
+          email:           contact.email,
+          lineItems:       fallbackOrder.lineItems,
+          total:           fallbackOrder.total,
+          currency:        fallbackOrder.currency,
+          paymentMethod:   fallbackOrder.paymentMethod,
+          shippingAddress: fallbackOrder.shippingAddress as Record<string, string> | undefined,
+          discountAmount:  fallbackOrder.discountAmount,
+          promoCode:       fallbackOrder.promoCode,
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
     res.json(fallbackOrder);
   }
 });
@@ -1443,6 +1548,19 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       preferredContactTime: preferredContactTime ?? "Any time",
       photos: photos ?? [],
     }).returning();
+    // SMS + email confirmation (fire-and-forget)
+    getUserContact(userId).then(contact => {
+      if (contact?.phone) {
+        sendSms(contact.phone, ticketConfirmationSms({ ticketId: ticket.id, firstName: contact.firstName }));
+      }
+      if (contact?.email) {
+        const receipt = buildTicketConfirmationEmail({
+          ticketId: ticket.id, firstName: contact.firstName, email: contact.email,
+          productModel: ticket.productModel, issueDescription: ticket.issueDescription,
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
     res.status(201).json(ticket);
   } catch (err) {
     console.error("[tickets] DB insert failed, using fallback:", err);
@@ -1454,6 +1572,19 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       createdAt: new Date().toISOString(),
     };
     ticketStoreFallback.push(fallback);
+    // SMS + email confirmation (fire-and-forget, fallback path)
+    getUserContact(userId).then(contact => {
+      if (contact?.phone) {
+        sendSms(contact.phone, ticketConfirmationSms({ ticketId: id, firstName: contact.firstName }));
+      }
+      if (contact?.email) {
+        const receipt = buildTicketConfirmationEmail({
+          ticketId: id, firstName: contact.firstName, email: contact.email,
+          productModel: productModel ?? "", issueDescription: issueDescription ?? "",
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
     res.status(201).json(fallback);
   }
 });
@@ -1483,6 +1614,18 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
       waterSource: waterSource ?? "Municipal",
       concerns:    concerns ?? "",
     }).returning();
+    // SMS + email confirmation — phone submitted in form (fire-and-forget)
+    const firstName = name.split(" ")[0] ?? name;
+    sendSms(phone, waterTestConfirmationSms({ testId: wt.id, address, firstName }));
+    getUserContact(userId).then(contact => {
+      if (contact?.email) {
+        const receipt = buildWaterTestConfirmationEmail({
+          testId: wt.id, firstName: contact.firstName, email: contact.email,
+          address, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
     res.status(201).json(wt);
   } catch (err) {
     console.error("[water-tests] DB insert failed, using fallback:", err);
@@ -1494,6 +1637,18 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
       createdAt:   new Date().toISOString(),
     };
     waterTestStoreFallback.push(fallback);
+    // SMS + email confirmation (fire-and-forget, fallback path)
+    const firstName2 = name.split(" ")[0] ?? name;
+    sendSms(phone, waterTestConfirmationSms({ testId: id, address, firstName: firstName2 }));
+    getUserContact(userId).then(contact => {
+      if (contact?.email) {
+        const receipt = buildWaterTestConfirmationEmail({
+          testId: id, firstName: contact.firstName, email: contact.email,
+          address, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
+        });
+        sendEmail({ to: contact.email, ...receipt });
+      }
+    }).catch(() => {});
     res.status(201).json(fallback);
   }
 });
