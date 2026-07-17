@@ -5,6 +5,8 @@ import {
   registerReferralAtSignup,
 } from "./referrals";
 import { issueToken, verifyToken } from "../lib/jwt.js";
+import { db, ucPushTokensTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -725,10 +727,6 @@ router.get("/uc/orders", async (_req: Request, res: Response): Promise<void> => 
 });
 
 // ─── Push notifications infrastructure ──────────────────────────────────────
-// In-memory store: userId (from JWT) → Expo push token.
-// Tokens survive as long as the process runs; a DB-backed store is tracked as
-// a follow-up task.
-const pushTokenStore = new Map<string, string>();
 
 /**
  * Verify the Bearer JWT and return a stable user-identity string.
@@ -740,14 +738,37 @@ function userIdFromBearer(authHeader: string | undefined): string {
   return String(claims.id ?? claims.email ?? "anonymous");
 }
 
-/** Send a single push notification via the Expo Push API (throws on network failure). */
+/** Retrieve a user's push token from the database. Returns null if not found. */
+async function getPushToken(userId: string): Promise<string | null> {
+  try {
+    const row = await db.query.ucPushTokensTable.findFirst({
+      where: eq(ucPushTokensTable.userId, userId),
+    });
+    return row?.pushToken ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove a stale / unregistered token from the database. */
+async function removePushToken(userId: string): Promise<void> {
+  try {
+    await db.delete(ucPushTokensTable).where(eq(ucPushTokensTable.userId, userId));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Send a single push notification via the Expo Push API.
+ * Returns true if the token is stale (DeviceNotRegistered) so the caller
+ * can clean it up.
+ */
 async function callExpoPushApi(
   token: string,
   title: string,
   body: string,
   data: Record<string, unknown> = {}
-): Promise<void> {
-  await fetch("https://exp.host/--/api/v2/push/send", {
+): Promise<{ staleToken: boolean }> {
+  const res = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers: {
       "Content-Type":    "application/json",
@@ -756,11 +777,20 @@ async function callExpoPushApi(
     },
     body: JSON.stringify([{ to: token, title, body, data }]),
   });
+  try {
+    const json = await res.json() as { data?: Array<{ status: string; details?: { error?: string } }> };
+    const ticket = json?.data?.[0];
+    if (ticket?.status === "error" && ticket?.details?.error === "DeviceNotRegistered") {
+      return { staleToken: true };
+    }
+  } catch { /* response body parse error — not a stale token */ }
+  return { staleToken: false };
 }
 
 /**
- * Look up the registered push token for a user and fire a notification.
+ * Look up the registered push token for a user from the DB and fire a notification.
  * Fire-and-forget: failures are swallowed so they never block the caller.
+ * Automatically removes stale tokens that Expo reports as unregistered.
  */
 function sendPushToUser(
   userId: string,
@@ -768,9 +798,11 @@ function sendPushToUser(
   body: string,
   data: Record<string, unknown> = {}
 ): void {
-  const token = pushTokenStore.get(userId);
-  if (!token) return;
-  callExpoPushApi(token, title, body, data).catch(() => { /* ignore */ });
+  getPushToken(userId).then(async (token) => {
+    if (!token) return;
+    const { staleToken } = await callExpoPushApi(token, title, body, data);
+    if (staleToken) await removePushToken(userId);
+  }).catch(() => { /* ignore */ });
 }
 
 // ─── Orders ──────────────────────────────────────────────────────────────────
@@ -913,7 +945,7 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
  * The token is keyed by the user ID extracted from the Bearer JWT, so only
  * the authenticated user's own token is ever registered here.
  */
-router.post("/uc/notify/register", (req: Request, res: Response): void => {
+router.post("/uc/notify/register", async (req: Request, res: Response): Promise<void> => {
   const userId = userIdFromBearer(req.headers["authorization"]);
   if (userId === "anonymous") {
     res.status(401).json({ error: "Authentication required" });
@@ -924,8 +956,18 @@ router.post("/uc/notify/register", (req: Request, res: Response): void => {
     res.status(400).json({ error: "pushToken required" });
     return;
   }
-  pushTokenStore.set(userId, pushToken);
-  res.json({ ok: true });
+  try {
+    await db
+      .insert(ucPushTokensTable)
+      .values({ userId, pushToken, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: ucPushTokensTable.userId,
+        set: { pushToken, updatedAt: new Date() },
+      });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to register push token", detail: String(err) });
+  }
 });
 
 /**
@@ -944,7 +986,7 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  const token = pushTokenStore.get(userId);
+  const token = await getPushToken(userId);
   if (!token) {
     res.status(404).json({ error: "No push token registered for this account" });
     return;
@@ -961,7 +1003,12 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
   }
 
   try {
-    await callExpoPushApi(token, title, body ?? "", data ?? {});
+    const { staleToken } = await callExpoPushApi(token, title, body ?? "", data ?? {});
+    if (staleToken) {
+      await removePushToken(userId);
+      res.status(410).json({ error: "Push token is no longer valid — device has unregistered" });
+      return;
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Push notification failed", detail: String(err) });
