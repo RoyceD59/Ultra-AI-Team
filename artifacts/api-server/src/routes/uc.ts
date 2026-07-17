@@ -5,7 +5,7 @@ import {
   registerReferralAtSignup,
 } from "./referrals";
 import { issueToken, verifyToken } from "../lib/jwt.js";
-import { db, ucPushTokensTable, ucEnquiriesTable } from "@workspace/db";
+import { db, ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router = Router();
@@ -738,13 +738,14 @@ function userIdFromBearer(authHeader: string | undefined): string {
   return String(claims.id ?? claims.email ?? "anonymous");
 }
 
-/** Retrieve a user's push token from the database. Returns null if not found. */
-async function getPushToken(userId: string): Promise<string | null> {
+/** Retrieve a user's push token row from the database. Returns null if not found. */
+async function getPushTokenRow(userId: string): Promise<{ pushToken: string; optOutOrders: boolean } | null> {
   try {
     const row = await db.query.ucPushTokensTable.findFirst({
       where: eq(ucPushTokensTable.userId, userId),
     });
-    return row?.pushToken ?? null;
+    if (!row) return null;
+    return { pushToken: row.pushToken, optOutOrders: row.optOutOrders };
   } catch {
     return null;
   }
@@ -792,15 +793,22 @@ async function callExpoPushApi(
  * Fire-and-forget: failures are swallowed so they never block the caller.
  * Automatically removes stale tokens that Expo reports as unregistered.
  */
+/**
+ * Send a push notification to a user, respecting their opt-out preferences.
+ * `category` controls which opt-out flag is checked:
+ *   - "orders": checked against optOutOrders
+ */
 function sendPushToUser(
   userId: string,
   title: string,
   body: string,
-  data: Record<string, unknown> = {}
+  data: Record<string, unknown> = {},
+  category: "orders" | "general" = "general"
 ): void {
-  getPushToken(userId).then(async (token) => {
-    if (!token) return;
-    const { staleToken } = await callExpoPushApi(token, title, body, data);
+  getPushTokenRow(userId).then(async (row) => {
+    if (!row) return;
+    if (category === "orders" && row.optOutOrders) return;
+    const { staleToken } = await callExpoPushApi(row.pushToken, title, body, data);
     if (staleToken) await removePushToken(userId);
   }).catch(() => { /* ignore */ });
 }
@@ -896,7 +904,8 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           orderUserId,
           "✅ Order confirmed!",
           `Your order #${normalized["id"] ?? "–"} is being processed.`,
-          { screen: "orders", orderId: String(normalized["id"] ?? "") }
+          { screen: "orders", orderId: String(normalized["id"] ?? "") },
+          "orders"
         );
         res.json(normalized);
         return;
@@ -931,7 +940,8 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
     orderUserId,
     "✅ Order confirmed!",
     `Your order #${newOrder.id} is placed and being processed.`,
-    { screen: "orders", orderId: String(newOrder.id) }
+    { screen: "orders", orderId: String(newOrder.id) },
+    "orders"
   );
 
   res.json(newOrder);
@@ -957,16 +967,71 @@ router.post("/uc/notify/register", async (req: Request, res: Response): Promise<
     return;
   }
   try {
+    // Check whether this user already has saved notification preferences so we
+    // can carry them over into the push token row (handles the case where the
+    // user opted out before granting push permission).
+    const existingPrefs = await db.query.ucNotifPrefsTable
+      .findFirst({ where: eq(ucNotifPrefsTable.userId, userId) })
+      .catch(() => null);
+
     await db
       .insert(ucPushTokensTable)
-      .values({ userId, pushToken, updatedAt: new Date() })
+      .values({
+        userId,
+        pushToken,
+        optOutOrders: existingPrefs?.optOutOrders ?? false,
+        updatedAt: new Date(),
+      })
       .onConflictDoUpdate({
         target: ucPushTokensTable.userId,
-        set: { pushToken, updatedAt: new Date() },
+        set: {
+          pushToken,
+          // Preserve the opt-out flag from the prefs table if available; otherwise
+          // keep whatever was already stored (don't reset an existing opt-out).
+          ...(existingPrefs != null ? { optOutOrders: existingPrefs.optOutOrders } : {}),
+          updatedAt: new Date(),
+        },
       });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to register push token", detail: String(err) });
+  }
+});
+
+/**
+ * POST /api/uc/notify/prefs
+ * Authenticated — upserts the caller's server-side notification opt-out flags.
+ * Works even when no push token has been registered yet: prefs are stored in
+ * uc_notif_prefs and synced into uc_push_tokens the next time a token is
+ * registered, so user opt-outs are never silently lost.
+ * Body: { optOutOrders?: boolean }
+ */
+router.post("/uc/notify/prefs", async (req: Request, res: Response): Promise<void> => {
+  const userId = userIdFromBearer(req.headers["authorization"]);
+  if (userId === "anonymous") {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const { optOutOrders } = req.body as { optOutOrders?: boolean };
+  const value = optOutOrders ?? false;
+  try {
+    // Upsert into the dedicated prefs table — always works, even without a push token row.
+    await db
+      .insert(ucNotifPrefsTable)
+      .values({ userId, optOutOrders: value, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: ucNotifPrefsTable.userId,
+        set: { optOutOrders: value, updatedAt: new Date() },
+      });
+    // Best-effort: also sync to the push token row if one exists so sendPushToUser
+    // can use a single-table lookup.
+    await db
+      .update(ucPushTokensTable)
+      .set({ optOutOrders: value })
+      .where(eq(ucPushTokensTable.userId, userId));
+    res.json({ ok: true, created: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update preferences", detail: String(err) });
   }
 });
 
@@ -986,11 +1051,12 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  const token = await getPushToken(userId);
-  if (!token) {
+  const tokenRow = await getPushTokenRow(userId);
+  if (!tokenRow) {
     res.status(404).json({ error: "No push token registered for this account" });
     return;
   }
+  const token = tokenRow.pushToken;
 
   const { title, body, data } = req.body as {
     title?: string;

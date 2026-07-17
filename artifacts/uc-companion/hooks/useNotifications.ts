@@ -27,8 +27,30 @@ if (Platform.OS !== 'web') {
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
-const PUSH_TOKEN_KEY       = 'uc_push_token';
+const PUSH_TOKEN_KEY        = 'uc_push_token';
 const FILTER_ACTIVATION_KEY = 'uc_filter_activation';
+const NOTIF_PREFS_KEY       = 'uc_notif_prefs';
+
+// ── Notification preferences ─────────────────────────────────────────────────
+
+export interface NotifPrefs {
+  orderUpdates:    boolean;  // push notifications for order status (server-side)
+  filterReminders: boolean;  // local scheduled filter lifecycle notifications
+}
+
+const DEFAULT_PREFS: NotifPrefs = { orderUpdates: true, filterReminders: true };
+
+export async function getNotifPrefs(): Promise<NotifPrefs> {
+  try {
+    const s = await AsyncStorage.getItem(NOTIF_PREFS_KEY);
+    if (!s) return { ...DEFAULT_PREFS };
+    return { ...DEFAULT_PREFS, ...(JSON.parse(s) as Partial<NotifPrefs>) };
+  } catch { return { ...DEFAULT_PREFS }; }
+}
+
+export async function saveNotifPrefs(prefs: NotifPrefs): Promise<void> {
+  await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(prefs));
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -236,8 +258,12 @@ export async function scheduleAllFilterNotifications(
 
   await cancelAllFilterNotifications();
 
-  const status = await getNotificationPermissionStatus();
-  if (status !== 'granted') {
+  const [status, prefs] = await Promise.all([
+    getNotificationPermissionStatus(),
+    getNotifPrefs(),
+  ]);
+
+  if (status !== 'granted' || !prefs.filterReminders) {
     const activation: FilterActivation = { ...params, notifIds: [] };
     await AsyncStorage.setItem(FILTER_ACTIVATION_KEY, JSON.stringify(activation));
     await AsyncStorage.setItem('uc_filter_last_changed', new Date(params.activatedAt).getTime().toString());
@@ -385,7 +411,8 @@ export async function recordPerformanceCheckIn(
       const now        = Date.now();
       const elapsed    = Math.floor((now - activationDate.getTime()) / 86_400_000);
 
-      if (Platform.OS !== 'web' && effDays < existing.lifespanDays) {
+      const filterPrefsOk = (await getNotifPrefs()).filterReminders;
+      if (Platform.OS !== 'web' && effDays < existing.lifespanDays && filterPrefsOk) {
         // Cancel old scheduled notifications
         await Promise.all((existing.notifIds ?? []).map(id =>
           Notifications.cancelScheduledNotificationAsync(id).catch(() => {})

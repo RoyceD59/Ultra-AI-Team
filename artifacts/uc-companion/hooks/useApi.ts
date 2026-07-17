@@ -244,6 +244,9 @@ export function useApi() {
     /** Register an Expo push token for the authenticated user. */
     registerPushToken: (pushToken: string) =>
       post<{ ok: boolean }>('/api/uc/notify/register', { pushToken }),
+    /** Sync server-side push notification opt-out preferences. */
+    updatePushPrefs: (prefs: { optOutOrders: boolean }) =>
+      post<{ ok: boolean }>('/api/uc/notify/prefs', prefs),
     /** Submit a product enquiry (works for guests and logged-in users). */
     createEnquiry: (data: {
       productId: number;

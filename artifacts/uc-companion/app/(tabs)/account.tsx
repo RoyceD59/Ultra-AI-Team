@@ -22,6 +22,7 @@ const MENU_ITEMS = [
   { label: 'Refer & Earn', icon: 'gift-outline' as const, route: '/referral' },
   { label: 'Maintenance Tickets', icon: 'construct-outline' as const, route: '/ticket/new' },
   { label: 'Water Test History', icon: 'flask-outline' as const, route: '/water-test' },
+  { label: 'Notification Preferences', icon: 'notifications-outline' as const, route: '/notification-preferences' },
   { label: 'Help & Support', icon: 'help-circle-outline' as const, route: '/(tabs)/support' },
 ];
 
