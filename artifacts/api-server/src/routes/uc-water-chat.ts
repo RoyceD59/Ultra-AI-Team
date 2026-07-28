@@ -1,10 +1,10 @@
 /**
- * UC Water Quality AI Chat
+ * Alison — UC Water Quality AI Assistant
  * POST /api/uc/ai/water-chat
  *
- * Accepts a conversation history and optional filter context.
- * Returns an AI-generated reply from Claude, personalised to
- * the user's registered filter product and Nairobi water conditions.
+ * Returns { reply: string, suggestions: string[] }
+ * `suggestions` are 2-3 short follow-up question chips the app renders
+ * below each assistant bubble for one-tap follow-up.
  */
 import { Router, type Request, type Response, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
@@ -12,44 +12,62 @@ import { anthropic } from "@workspace/integrations-anthropic-ai";
 const router: IRouter = Router();
 
 // ─── System prompt ────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are the Ultra-Clear AI Water Assistant — a friendly, knowledgeable helper for UCFilters customers in Nairobi and across Kenya.
+const SYSTEM_PROMPT = `You are Alison — Ultra-Clear's friendly water quality guide for customers in Nairobi and across Kenya.
 
-## Your role
-Help customers understand water quality, get the most from their Ultra-Clear filter, troubleshoot problems, and make informed decisions about water filtration.
+## Who you are
+You are warm, curious, and genuinely helpful. You listen before you advise. You ask one good question when you need to understand more about a customer's situation before recommending a product. You educate customers in plain language so they feel confident — not sold to.
+
+## How you have conversations
+- **Listen first.** When a customer describes a problem, acknowledge it and ask a clarifying question if needed (water source? which room? how many people?). Don't jump straight to a product recommendation.
+- **Educate while you recommend.** Explain *why* a product helps, not just that it does. E.g. "Borehole water often contains iron and bacteria that faucet filters can't fully remove — that's why a multi-stage system like the Counter Reverse Osmosis makes sense here."
+- **One question at a time.** Never ask more than one question per response. Keep the conversation flowing naturally.
+- **Be direct when you know enough.** Once you understand the situation, give a clear recommendation with a brief reason.
+- **Warm, human tone.** Use natural sentence structures. A little warmth goes a long way — but keep it professional.
 
 ## Ultra-Clear Product Catalogue (2026)
-**Portable & Bottle Filters (90-day cartridge)**
-- Hydra Flux, Truva Go, Viva Drop, Flex, Timbo, Gym Buddy, Breeze — personal bottle filters
-- Survivor Straw — portable straw filter, ideal for hiking and emergencies
-- EcoSmart Elite — solar-powered portable filter (120-day cartridge)
+**Portable & Bottle Filters**
+- Hydra Flux, Truva Go, Viva Drop, Flex, Timbo, Gym Buddy, Breeze — personal bottle filters (90-day/150L cartridge, SGS-certified)
+- Survivor Straw — portable straw for emergencies/hiking (120-day/400L cartridge)
+- EcoSmart Elite — solar-powered portable filter with power bank (90-day/400L cartridge)
 
-**Home Water Filters**
-- Sweet Home — faucet-mounted filter (120-day cartridge), easy DIY installation
-- Counter Reverse Osmosis — under-counter or countertop RO system (180-day membrane), removes dissolved salts, heavy metals, and fluoride
-- Electric Pitcher — filtered pitcher with UV indicator (90-day filter)
+**Home Filters**
+- Sweet Home — faucet-clip filter, tool-free, installs in 5 minutes (120-day cartridge) — best first home filter
+- Counter Reverse Osmosis — countertop RO, removes dissolved salts, heavy metals, fluoride, bacteria (180-day membrane), no plumbing needed
+- Electric Pitcher — counter-top pitcher, no installation (90-day/400L cartridge)
+- RO Home System — under-sink whole-home RO in 50G/75G/100G, professional installation by Ultra-Clear (enquire for pricing)
 
 **Shower & Skin Filters**
-- J'adore, Derma Care, Pure Drop — shower filters, 150-day cartridge, reduce chlorine and sediment for better skin and hair
-- Channel, Derma Flux — specialised shower filter lines, 135-day cartridge
+- J'adore, Derma Care, Pure Drop — shower filters (150-day), reduce chlorine for better skin and hair
+- Channel, Derma Flux — facial basin filters (135-day), chlorine removal at skincare source
 
-## Kenya / Nairobi Water Quality Facts
-- **Nairobi Water & Sewerage Company (NWSC) mains water** is chlorinated (0.2–0.5 mg/L residual) and treated, but chlorine taste and sediment spikes are common after heavy rains. Safe to drink after filtration.
-- **Borehole water** in Nairobi is often hard (high calcium/magnesium), may contain iron, fluoride (especially in Rift Valley areas), nitrates, and bacteria. Not safe without filtration. Hard water shortens filter cartridge life by ~30%.
-- **Surface water** (rivers, rainwater harvest) carries high sediment, bacteria, and organic matter — especially during the April–May long rains and October–November short rains. Harshest on filters; reduces cartridge life by ~45%.
-- **Mixed sources** (mains + borehole backup tank) are common in estates and apartments — effective filter life reduced by ~18%.
-- Nairobi's altitude (1,700 m) means cooler water temperatures year-round, which slightly reduces chlorine degradation rates.
-- Common Nairobi complaints: post-rain turbidity, chlorine taste on mains, iron staining from boreholes, and low-pressure affecting faucet filter flow.
-- The recommended replacement schedule assumes Nairobi mains water. Borehole and surface water users should replace cartridges earlier.
+**Solutions**
+- Aqua Stream 1200 — commercial RO for 50–200 staff (KES 69,990)
+- Water ATMs — community refill stations at KES 2–5/litre
 
-## Advice guidelines
-- Be practical, direct, and warm. Use plain conversational English — avoid jargon unless the customer uses it first.
-- Personalise responses to the customer's filter product and water source when that context is provided.
-- For safety-critical concerns (suspected heavy metals, illness after drinking), recommend a professional water test. Mention that UCFilters offers a free water quality assessment — the customer can book through the app.
-- Recommend Ultra-Clear products by name only when they genuinely fit the customer's need.
-- For complex installation or persistent issues, guide users to submit a maintenance ticket through the app or contact UCFilters directly.
-- Keep responses concise (2–4 short paragraphs) unless more detail is clearly needed.
-- Never claim a filter removes contaminants it is not rated for. When unsure of specifications, say so and suggest contacting support.
-- Use simple formatting — short paragraphs, avoid heavy markdown since the output renders in a mobile chat bubble.`;
+## Kenya / Nairobi Water Facts
+- **NWSC mains:** chlorinated, treated, generally safe after filtration. Post-rain turbidity spikes are common.
+- **Borehole:** often hard (high calcium/magnesium), may contain iron, fluoride, nitrates, bacteria. Not safe unfiltered. Shortens cartridge life ~30%.
+- **Surface water:** high sediment, bacteria, organic matter — harshest on filters, shortens life ~45%. Especially during April–May long rains and Oct–Nov short rains.
+- **Mixed (mains + borehole):** common in estates, reduces effective cartridge life ~18%.
+- Nairobi altitude (1,700 m) means cooler water — slightly slower chlorine degradation.
+- Common issues: post-rain cloudiness, chlorine taste, iron staining from boreholes, low-pressure on faucet filters.
+
+## Advice rules
+- Never claim a filter removes a contaminant it isn't rated for. When unsure, say so.
+- For suspected heavy metals or illness after drinking: recommend a professional water test. Mention UCFilters offers a free water quality assessment (book in the app).
+- For persistent issues or complex installation: guide to a support ticket in the app or info@ucfilters.com.
+- Keep responses to 2–4 short paragraphs. Use plain text — no heavy markdown; this renders in a mobile chat bubble.
+
+## Follow-up suggestions format (REQUIRED)
+End EVERY response with this exact line (no newline before it, no space after the colon):
+<!--SUG:["short question 1","short question 2","short question 3"]-->
+
+Rules for suggestions:
+- 2 or 3 items only
+- Each under 55 characters
+- Natural follow-ups a real person would ask next
+- Do NOT repeat a question already answered in the conversation
+- Do NOT include quotes inside the question text`;
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<void> => {
@@ -59,7 +77,7 @@ router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<vo
       productName?:   string;
       daysRemaining?: number;
       waterSource?:   string;
-      lastCheckIn?:   string;  // human-readable recommendation string
+      lastCheckIn?:   string;
       cleanCount?:    number;
     };
   };
@@ -69,7 +87,6 @@ router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<vo
     return;
   }
 
-  // Validate that all messages have the correct shape
   for (const m of messages) {
     if (m.role !== "user" && m.role !== "assistant") {
       res.status(400).json({ error: "Each message must have role 'user' or 'assistant'" });
@@ -81,66 +98,77 @@ router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<vo
     }
   }
 
-  // Conversations must start with a user turn
   if (messages[0]?.role !== "user") {
     res.status(400).json({ error: "First message must have role 'user'" });
     return;
   }
 
-  // Build a context preamble from the user's filter activation data
+  // Build context preamble from filter activation data
   let contextPreamble = "";
   if (filterContext && Object.values(filterContext).some(v => v !== undefined)) {
-    const parts: string[] = ["[Customer's filter context]"];
-    if (filterContext.productName)           parts.push(`Filter product: ${filterContext.productName}`);
-    if (filterContext.daysRemaining !== undefined) {
+    const parts: string[] = ["[Customer filter context]"];
+    if (filterContext.productName)
+      parts.push(`Product: ${filterContext.productName}`);
+    if (filterContext.daysRemaining !== undefined)
       parts.push(filterContext.daysRemaining > 0
-        ? `Days remaining on current cartridge: ${filterContext.daysRemaining}`
+        ? `Cartridge days remaining: ${filterContext.daysRemaining}`
         : "Cartridge overdue for replacement");
-    }
     if (filterContext.waterSource) {
-      const sourceLabels: Record<string, string> = {
-        mains:     "Nairobi NWSC mains water",
-        borehole:  "borehole water",
-        surface:   "surface / rainwater",
-        mixed:     "mixed mains + borehole",
+      const labels: Record<string, string> = {
+        mains:    "Nairobi NWSC mains",
+        borehole: "borehole water",
+        surface:  "surface / rainwater",
+        mixed:    "mixed mains + borehole",
       };
-      parts.push(`Water source: ${sourceLabels[filterContext.waterSource] ?? filterContext.waterSource}`);
+      parts.push(`Water source: ${labels[filterContext.waterSource] ?? filterContext.waterSource}`);
     }
-    if (filterContext.cleanCount !== undefined) {
-      parts.push(`Times cartridge cleaned: ${filterContext.cleanCount}`);
-    }
-    if (filterContext.lastCheckIn) {
-      parts.push(`Last performance check-in result: ${filterContext.lastCheckIn}`);
-    }
+    if (filterContext.cleanCount !== undefined)
+      parts.push(`Times cleaned: ${filterContext.cleanCount}`);
+    if (filterContext.lastCheckIn)
+      parts.push(`Last check-in result: ${filterContext.lastCheckIn}`);
     contextPreamble = parts.join(" | ");
   }
 
-  // Inject context preamble into the first user message only
-  const anthropicMessages = messages.map((m, i) => {
-    if (i === 0 && contextPreamble) {
-      return { role: m.role as "user" | "assistant", content: `${contextPreamble}\n\nCustomer question: ${m.content}` };
-    }
-    return { role: m.role as "user" | "assistant", content: m.content };
-  });
+  const anthropicMessages = messages.map((m, i) => ({
+    role:    m.role as "user" | "assistant",
+    content: i === 0 && contextPreamble
+      ? `${contextPreamble}\n\nCustomer: ${m.content}`
+      : m.content,
+  }));
 
   try {
     const response = await anthropic.messages.create({
       model:      "claude-haiku-4-5",
-      max_tokens: 8192,
+      max_tokens: 1024,
       system:     SYSTEM_PROMPT,
       messages:   anthropicMessages,
     });
 
-    const replyBlock = response.content.find(b => b.type === "text");
-    const reply = replyBlock?.type === "text"
-      ? replyBlock.text
-      : "I'm sorry, I couldn't generate a response. Please try again.";
+    const rawText = response.content.find(b => b.type === "text")?.type === "text"
+      ? (response.content.find(b => b.type === "text") as { type: "text"; text: string }).text
+      : "";
 
-    res.json({ reply });
+    // Parse and strip the <!--SUG:[...]-->  tag
+    const sugMatch = rawText.match(/<!--SUG:(\[.*?\])-->/s);
+    let suggestions: string[] = [];
+    if (sugMatch) {
+      try {
+        const parsed = JSON.parse(sugMatch[1]) as unknown;
+        if (Array.isArray(parsed)) {
+          suggestions = (parsed as unknown[])
+            .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+            .slice(0, 3);
+        }
+      } catch { /* malformed JSON — keep empty */ }
+    }
+    const reply = rawText.replace(/<!--SUG:\[.*?\]-->/s, "").trimEnd() ||
+      "I'm sorry, I couldn't generate a response. Please try again.";
+
+    res.json({ reply, suggestions });
   } catch (err) {
     console.error("[uc/ai/water-chat] AI error:", err);
     res.status(502).json({
-      error: "AI service temporarily unavailable. Please try again shortly or contact support at +254 700 000 000.",
+      error: "Alison is temporarily unavailable. Please try again shortly or contact support at +254 700 000 000.",
     });
   }
 });

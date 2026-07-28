@@ -1,17 +1,19 @@
 /**
- * AI Water Quality Assistant chat screen
+ * Alison — Ultra-Clear AI Water Assistant
  *
- * Opens from:
- *   • Support tab  — generic entry, no filter context
- *   • FilterTrackerSection — passes productName, daysRemaining, waterSource, etc.
- *
- * Navigation params (all optional):
- *   productName, daysRemaining, waterSource, lastCheckIn, cleanCount
+ * Features:
+ *  - Named "Alison", consultative/needs-finding personality
+ *  - Follow-up suggestion chips after every AI reply
+ *  - Auto-complete chips above input bar while typing
+ *  - Animated typing indicator
+ *  - Context-aware greeting when opened from Filter Tracker
  */
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, {
+  useState, useRef, useEffect, useCallback, useMemo,
+} from 'react';
 import {
-  View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList,
-  KeyboardAvoidingView, Platform, ActivityIndicator,
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
+  FlatList, KeyboardAvoidingView, Platform, Animated, Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,9 +25,10 @@ import * as Haptics from 'expo-haptics';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Message {
-  id:      string;
-  role:    'user' | 'assistant';
-  content: string;
+  id:          string;
+  role:        'user' | 'assistant';
+  content:     string;
+  suggestions?: string[];   // follow-up chips shown below an assistant bubble
 }
 
 interface FilterContext {
@@ -36,73 +39,117 @@ interface FilterContext {
   cleanCount?:    number;
 }
 
+// ── Static autocomplete pool ──────────────────────────────────────────────────
+// Shown as chips above the input bar when the user types 3+ matching chars.
+
+const AUTOCOMPLETE_POOL = [
+  "Why does my water smell like chlorine?",
+  "Is borehole water safe to drink?",
+  "How do I know when to replace my filter?",
+  "Why is my filter flow slow?",
+  "What's the best filter for Nairobi mains water?",
+  "How do I clean my filter cartridge?",
+  "Does the Sweet Home filter remove fluoride?",
+  "How often should I replace the Survivor Straw cartridge?",
+  "Does Nairobi water have heavy metals?",
+  "What filter is best for a family of 4?",
+  "Can I use my filter with borehole water?",
+  "Why does filtered water still taste off?",
+  "How do I install the Sweet Home faucet filter?",
+  "What is reverse osmosis and do I need it?",
+  "How does rainy season affect my filter?",
+  "What shower filter do you recommend?",
+  "How do I book a water quality test?",
+  "What is the EcoSmart Elite good for?",
+  "How long does the bottle cartridge last?",
+  "Can I filter rainwater with a bottle filter?",
+];
+
 // ── Greeting helpers ──────────────────────────────────────────────────────────
 
 const GENERIC_GREETING =
-  "Hi! I'm your Ultra-Clear AI Water Assistant 💧\n\nAsk me anything — why your water smells like chlorine, how to get better flow, when to replace your filter, or what borehole water means for your health. I'm here to help.";
+  "Hi, I'm Alison 👋 — Ultra-Clear's water guide.\n\nI'm here to help you get clean, safe water at home or on the go. Tell me a bit about your situation — what kind of water do you use, or what problem are you trying to solve? I'll point you in the right direction.";
 
 function buildContextGreeting(ctx: FilterContext): string {
   const parts: string[] = [];
-  if (ctx.productName)                 parts.push(`You have a **${ctx.productName}**`);
+  if (ctx.productName)   parts.push(`your **${ctx.productName}**`);
   if (ctx.daysRemaining !== undefined) {
     parts.push(ctx.daysRemaining > 0
-      ? `with **${ctx.daysRemaining} day${ctx.daysRemaining === 1 ? '' : 's'}** left on the cartridge`
-      : "with a **cartridge that's overdue for replacement**");
+      ? `${ctx.daysRemaining} day${ctx.daysRemaining === 1 ? '' : 's'} left on the cartridge`
+      : 'a cartridge that\'s overdue for replacement');
   }
   if (ctx.waterSource) {
     const labels: Record<string, string> = {
-      mains:    'on Nairobi mains water',
-      borehole: 'on borehole water',
-      surface:  'on surface/rainwater',
-      mixed:    'on mixed mains + borehole',
+      mains: 'Nairobi mains water', borehole: 'borehole water',
+      surface: 'surface/rainwater', mixed: 'mixed mains + borehole',
     };
-    parts.push(labels[ctx.waterSource] ?? `on ${ctx.waterSource} water`);
+    parts.push(labels[ctx.waterSource] ?? ctx.waterSource);
   }
 
-  const intro = parts.length > 0
-    ? `Hi! I can see ${parts.join(', ')}. `
-    : "Hi! ";
-
-  return `${intro}Ask me anything — about your filter performance, water taste, when to replace, or Nairobi water quality in general.`;
+  const context = parts.length > 0 ? `I can see you have ${parts.join(', ')}. ` : '';
+  return `Hi, I'm Alison 👋\n\n${context}What's on your mind? Whether it's water taste, filter performance, or when to replace — I'm here to help.`;
 }
 
-// ── Suggested prompts ─────────────────────────────────────────────────────────
-
-const SUGGESTIONS_GENERIC = [
-  "Why does my water smell like chlorine after filtering?",
-  "Is borehole water safe to drink?",
-  "How do I know when to replace my filter?",
-];
-
-function buildSuggestions(ctx: FilterContext): string[] {
-  const s: string[] = [];
+function buildInitialSuggestions(ctx: FilterContext): string[] {
   if (ctx.productName) {
-    s.push(`How do I clean my ${ctx.productName}?`);
+    return [
+      `How do I clean my ${ctx.productName}?`,
+      ctx.waterSource === 'borehole' ? 'Does my filter handle iron in borehole water?' : 'Why does my water still taste of chlorine?',
+      'When should I replace my cartridge?',
+    ];
   }
-  if (ctx.waterSource === 'borehole') {
-    s.push("Does my filter remove iron from borehole water?");
-  } else if (ctx.waterSource === 'surface') {
-    s.push("How does rainy season affect my filter life?");
-  } else {
-    s.push("Why does Nairobi water taste like chlorine?");
-  }
-  s.push("When should I replace my cartridge?");
-  return s.slice(0, 3);
+  return [
+    "What filter suits Nairobi mains water?",
+    "Is borehole water safe to drink?",
+    "Help me pick a filter for my home",
+  ];
+}
+
+// ── Animated typing dots ──────────────────────────────────────────────────────
+
+function TypingDots({ color }: { color: string }) {
+  const dots = [useRef(new Animated.Value(0)).current,
+                useRef(new Animated.Value(0)).current,
+                useRef(new Animated.Value(0)).current];
+
+  useEffect(() => {
+    const anims = dots.map((dot, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 160),
+          Animated.timing(dot, { toValue: 1, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.delay(480 - i * 160),
+        ])
+      )
+    );
+    Animated.parallel(anims).start();
+    return () => anims.forEach(a => a.stop());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <View style={styles.typingRow}>
+      {dots.map((dot, i) => (
+        <Animated.View
+          key={i}
+          style={[styles.dot, { backgroundColor: color, transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }] }]}
+        />
+      ))}
+    </View>
+  );
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function AiChatScreen() {
-  const colors  = useColors();
-  const router  = useRouter();
-  const api     = useApi();
+  const colors = useColors();
+  const router = useRouter();
+  const api    = useApi();
 
   const params = useLocalSearchParams<{
-    productName?:   string;
-    daysRemaining?: string;
-    waterSource?:   string;
-    lastCheckIn?:   string;
-    cleanCount?:    string;
+    productName?: string; daysRemaining?: string;
+    waterSource?: string; lastCheckIn?:   string; cleanCount?: string;
   }>();
 
   const filterContext: FilterContext = {
@@ -113,16 +160,15 @@ export default function AiChatScreen() {
     cleanCount:    params.cleanCount    ? Number(params.cleanCount)    : undefined,
   };
 
-  const hasContext = Boolean(filterContext.productName || filterContext.waterSource);
-  const initialGreeting = hasContext ? buildContextGreeting(filterContext) : GENERIC_GREETING;
-  const suggestions     = hasContext ? buildSuggestions(filterContext)     : SUGGESTIONS_GENERIC;
+  const hasContext        = Boolean(filterContext.productName || filterContext.waterSource);
+  const initialGreeting   = hasContext ? buildContextGreeting(filterContext) : GENERIC_GREETING;
+  const initialSuggestions = buildInitialSuggestions(filterContext);
 
   const [messages, setMessages] = useState<Message[]>([
-    { id: 'greeting', role: 'assistant', content: initialGreeting },
+    { id: 'greeting', role: 'assistant', content: initialGreeting, suggestions: initialSuggestions },
   ]);
-  const [input,   setInput]   = useState('');
-  const [sending, setSending] = useState(false);
-  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [input,          setInput]          = useState('');
+  const [sending,        setSending]        = useState(false);
   const listRef = useRef<FlatList<Message>>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -131,64 +177,90 @@ export default function AiChatScreen() {
 
   useEffect(() => { scrollToBottom(); }, [messages.length, scrollToBottom]);
 
-  // ── Send logic ──────────────────────────────────────────────────────────────
+  // ── Autocomplete ─────────────────────────────────────────────────────────────
+
+  const autocomplete = useMemo(() => {
+    const q = input.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return AUTOCOMPLETE_POOL.filter(s => s.toLowerCase().includes(q)).slice(0, 3);
+  }, [input]);
+
+  // ── Send ─────────────────────────────────────────────────────────────────────
 
   async function handleSend(textOverride?: string) {
     const text = (textOverride ?? input).trim();
     if (!text || sending) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    setShowSuggestions(false);
 
     const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text };
-    const updatedMessages = [...messages, userMsg];
-    setMessages(updatedMessages);
+    const updated = [...messages, userMsg];
+    setMessages(updated);
     if (!textOverride) setInput('');
     setSending(true);
     scrollToBottom();
 
-    // History to send — skip the initial greeting (it's context, not a real turn)
-    const history = updatedMessages
+    const history = updated
       .filter(m => m.id !== 'greeting')
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const { reply } = await api.waterAiChat(history, filterContext);
-      const aiMsg: Message = { id: `a-${Date.now()}`, role: 'assistant', content: reply };
-      setMessages(prev => [...prev, aiMsg]);
+      const { reply, suggestions } = await api.waterAiChat(history, filterContext);
+      setMessages(prev => [...prev, {
+        id:          `a-${Date.now()}`,
+        role:        'assistant',
+        content:     reply,
+        suggestions: suggestions?.length ? suggestions : undefined,
+      }]);
     } catch {
-      const errMsg: Message = {
+      setMessages(prev => [...prev, {
         id:      `err-${Date.now()}`,
         role:    'assistant',
-        content: "I'm having trouble connecting right now. Please try again in a moment, or contact UCFilters support at +254 700 000 000 or support@ucfilters.co.ke.",
-      };
-      setMessages(prev => [...prev, errMsg]);
+        content: "I'm having a little trouble connecting right now. Please try again in a moment, or reach UCFilters support at +254 700 000 000 or support@ucfilters.co.ke.",
+      }]);
     } finally {
       setSending(false);
     }
   }
 
-  // ── Render helpers ──────────────────────────────────────────────────────────
+  // ── Render message ────────────────────────────────────────────────────────────
 
   function renderMessage({ item }: { item: Message }) {
     const isUser = item.role === 'user';
     return (
-      <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
-        {!isUser && (
-          <View style={[styles.avatar, { backgroundColor: colors.primaryLight }]}>
-            <Ionicons name="water" size={13} color={colors.primary} />
+      <View style={styles.msgGroup}>
+        <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
+          {!isUser && (
+            <View style={[styles.avatar, { backgroundColor: colors.primaryLight }]}>
+              <Text style={styles.avatarLetter}>A</Text>
+            </View>
+          )}
+          <View style={[
+            styles.bubble,
+            isUser
+              ? [styles.bubbleUser, { backgroundColor: colors.primary }]
+              : [styles.bubbleAI,   { backgroundColor: colors.surface, borderColor: colors.border }],
+          ]}>
+            <Text style={[styles.bubbleText, { color: isUser ? '#fff' : colors.text }]}>
+              {item.content}
+            </Text>
+          </View>
+        </View>
+
+        {/* Follow-up suggestion chips — assistant only */}
+        {!isUser && item.suggestions && item.suggestions.length > 0 && (
+          <View style={[styles.chipRow, { marginLeft: 36 }]}>
+            {item.suggestions.map(s => (
+              <TouchableOpacity
+                key={s}
+                onPress={() => handleSend(s)}
+                activeOpacity={0.75}
+                style={[styles.followChip, { borderColor: colors.primary + '55', backgroundColor: colors.primaryLight + '55' }]}>
+                <Text style={[styles.followChipText, { color: colors.primary }]} numberOfLines={2}>{s}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         )}
-        <View style={[
-          styles.bubble,
-          isUser
-            ? [styles.bubbleUser, { backgroundColor: colors.primary }]
-            : [styles.bubbleAI,   { backgroundColor: colors.surface, borderColor: colors.border }],
-        ]}>
-          <Text style={[styles.bubbleText, { color: isUser ? '#fff' : colors.text }]}>
-            {item.content}
-          </Text>
-        </View>
       </View>
     );
   }
@@ -197,24 +269,28 @@ export default function AiChatScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['bottom']}>
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <View style={[styles.header, { backgroundColor: colors.card, borderColor: colors.border, marginTop: topPad }]}>
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backBtn}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="chevron-back" size={24} color={colors.primary} />
         </TouchableOpacity>
-        <View style={[styles.headerIcon, { backgroundColor: colors.primaryLight }]}>
-          <Ionicons name="water" size={16} color={colors.primary} />
+        <View style={[styles.headerAvatar, { backgroundColor: colors.primary }]}>
+          <Text style={styles.headerAvatarText}>A</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Water AI Assistant</Text>
-          <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>Powered by Ultra-Clear AI</Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Alison</Text>
+          <View style={styles.headerSubRow}>
+            <View style={styles.onlineDot} />
+            <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>Ultra-Clear Water Guide</Text>
+          </View>
         </View>
       </View>
 
-      {/* ── Messages + input ────────────────────────────────────────────────── */}
+      {/* ── Messages + input ─────────────────────────────────────────────────── */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -229,48 +305,46 @@ export default function AiChatScreen() {
           showsVerticalScrollIndicator={false}
           onContentSizeChange={scrollToBottom}
           ListFooterComponent={
-            <>
-              {/* Typing indicator */}
-              {sending && (
-                <View style={[styles.msgRow, { marginTop: 4 }]}>
-                  <View style={[styles.avatar, { backgroundColor: colors.primaryLight }]}>
-                    <Ionicons name="water" size={13} color={colors.primary} />
-                  </View>
-                  <View style={[styles.bubble, styles.bubbleAI, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                    <TypingDots color={colors.mutedForeground} />
-                  </View>
+            sending ? (
+              <View style={[styles.msgRow, { marginTop: 4 }]}>
+                <View style={[styles.avatar, { backgroundColor: colors.primaryLight }]}>
+                  <Text style={styles.avatarLetter}>A</Text>
                 </View>
-              )}
-
-              {/* Suggestion chips — shown only before first user message */}
-              {showSuggestions && !sending && (
-                <View style={styles.suggestions}>
-                  {suggestions.map(s => (
-                    <TouchableOpacity
-                      key={s}
-                      onPress={() => handleSend(s)}
-                      activeOpacity={0.8}
-                      style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.primary + '60' }]}>
-                      <Text style={[styles.chipText, { color: colors.primary }]}>{s}</Text>
-                    </TouchableOpacity>
-                  ))}
+                <View style={[styles.bubble, styles.bubbleAI, { backgroundColor: colors.surface, borderColor: colors.border, paddingVertical: 14 }]}>
+                  <TypingDots color={colors.mutedForeground} />
                 </View>
-              )}
-            </>
+              </View>
+            ) : null
           }
         />
 
-        {/* ── Input bar ──────────────────────────────────────────────────── */}
+        {/* ── Autocomplete strip ─────────────────────────────────────────────── */}
+        {autocomplete.length > 0 && (
+          <View style={[styles.autocompleteBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {autocomplete.map(s => (
+              <TouchableOpacity
+                key={s}
+                onPress={() => { setInput(s); }}
+                activeOpacity={0.75}
+                style={[styles.autocompleteChip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="search-outline" size={11} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+                <Text style={[styles.autocompleteText, { color: colors.text }]} numberOfLines={1}>{s}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* ── Input bar ─────────────────────────────────────────────────────── */}
         <View style={[styles.inputBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="Ask about your water or filter…"
+            placeholder="Ask Alison about your water…"
             placeholderTextColor={colors.mutedForeground}
             style={[styles.input, { color: colors.text, backgroundColor: colors.surface, borderColor: colors.border }]}
             multiline
             maxLength={600}
-            returnKeyType={Platform.OS === 'ios' ? 'default' : 'send'}
+            returnKeyType="default"
             blurOnSubmit={false}
           />
           <TouchableOpacity
@@ -289,55 +363,54 @@ export default function AiChatScreen() {
   );
 }
 
-// ── Typing animation ──────────────────────────────────────────────────────────
-
-function TypingDots({ color }: { color: string }) {
-  return (
-    <View style={styles.typingRow}>
-      <ActivityIndicator size="small" color={color} />
-      <Text style={[styles.typingText, { color }]}>thinking…</Text>
-    </View>
-  );
-}
-
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe:         { flex: 1 },
+  safe:   { flex: 1 },
 
-  header:       { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
-  backBtn:      { padding: 2 },
-  headerIcon:   { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  headerTitle:  { fontSize: 15, fontWeight: '700' as const },
-  headerSub:    { fontSize: 12, marginTop: 1 },
+  header:           { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 11, borderBottomWidth: 1 },
+  backBtn:          { padding: 2 },
+  headerAvatar:     { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  headerAvatarText: { fontSize: 16, fontWeight: '700' as const, color: '#fff' },
+  headerTitle:      { fontSize: 15, fontWeight: '700' as const },
+  headerSubRow:     { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
+  onlineDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#22c55e' },
+  headerSub:        { fontSize: 12 },
 
-  list:         { padding: 16, gap: 10, paddingBottom: 12 },
+  list:     { padding: 16, paddingBottom: 12, gap: 10 },
 
-  msgRow:       { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  msgRowUser:   { flexDirection: 'row-reverse' },
+  msgGroup: { gap: 6 },
+  msgRow:   { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  msgRowUser: { flexDirection: 'row-reverse' },
+
   avatar:       { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  avatarLetter: { fontSize: 13, fontWeight: '700' as const, color: '#0054A6' },
 
-  bubble:       { maxWidth: '80%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1 },
-  bubbleUser:   { borderTopRightRadius: 4, borderWidth: 0 },
-  bubbleAI:     { borderTopLeftRadius: 4 },
-  bubbleText:   { fontSize: 14, lineHeight: 22 },
+  bubble:     { maxWidth: '82%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1 },
+  bubbleUser: { borderTopRightRadius: 4, borderWidth: 0 },
+  bubbleAI:   { borderTopLeftRadius: 4 },
+  bubbleText: { fontSize: 14, lineHeight: 22 },
 
-  typingRow:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  typingText:   { fontSize: 13 },
+  // Follow-up chips (below assistant bubble)
+  chipRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  followChip:      { borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, paddingVertical: 6, maxWidth: 240 },
+  followChipText:  { fontSize: 12, fontWeight: '500' as const, lineHeight: 16 },
 
-  suggestions:  { gap: 8, marginTop: 12 },
-  chip:         { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
-  chipText:     { fontSize: 13, fontWeight: '500' as const },
+  // Autocomplete strip
+  autocompleteBar:  { borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 6, gap: 6, flexDirection: 'column' },
+  autocompleteChip: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  autocompleteText: { fontSize: 13, flex: 1 },
 
-  inputBar:     {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingTop: 10,
+  // Typing dots
+  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 2 },
+  dot:       { width: 7, height: 7, borderRadius: 4 },
+
+  inputBar: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
+    paddingHorizontal: 12, paddingTop: 10,
     paddingBottom: Platform.OS === 'ios' ? 24 : 12,
     borderTopWidth: 1,
   },
-  input:        { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 10 : 8, fontSize: 14, maxHeight: 110 },
-  sendBtn:      { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  input:   { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 14, paddingVertical: Platform.OS === 'ios' ? 10 : 8, fontSize: 14, maxHeight: 110 },
+  sendBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 });

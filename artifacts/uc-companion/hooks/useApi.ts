@@ -375,6 +375,6 @@ export function useApi() {
         lastCheckIn?:   string;
         cleanCount?:    number;
       },
-    ) => post<{ reply: string }>('/api/uc/ai/water-chat', { messages, filterContext }),
+    ) => post<{ reply: string; suggestions: string[] }>('/api/uc/ai/water-chat', { messages, filterContext }),
   };
 }
