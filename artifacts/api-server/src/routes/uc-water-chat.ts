@@ -13,8 +13,8 @@
 import { Router, type Request, type Response, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { verifyToken } from "../lib/jwt.js";
-import { db, ucUsersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, ucUsersTable, ucAiFeedbackTable } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -66,17 +66,6 @@ async function isAdminRequest(authHeader: string | undefined): Promise<boolean> 
   );
 }
 
-// ─── In-memory feedback store (knowledge base) ────────────────────────────────
-// Keeps the last 500 rated exchanges. The UCFilters team can read
-// GET /api/uc/ai/chat-feedback (admin-only) to review low-rated answers.
-interface FeedbackEntry {
-  ts:       string;
-  rating:   "up" | "down";
-  question: string;
-  answer:   string;
-}
-const feedbackLog: FeedbackEntry[] = [];
-const MAX_FEEDBACK = 500;
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are Alison — Ultra-Clear's water quality guide for customers in Nairobi and across Kenya.
@@ -263,9 +252,10 @@ router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<vo
 });
 
 // ─── POST /api/uc/ai/chat-feedback ───────────────────────────────────────────
-// Stores customer thumbs up/down ratings. Forms the knowledge base that
-// the UCFilters team reviews to identify gaps in Alison's answers.
-router.post("/uc/ai/chat-feedback", (req: Request, res: Response): void => {
+// Stores customer thumbs up/down ratings in the database.
+// Forms the knowledge base that the UCFilters team reviews to identify gaps
+// in Alison's answers.
+router.post("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<void> => {
   const { rating, question, answer } = req.body as {
     rating:   unknown;
     question: unknown;
@@ -281,21 +271,23 @@ router.post("/uc/ai/chat-feedback", (req: Request, res: Response): void => {
     return;
   }
 
-  const entry: FeedbackEntry = {
-    ts:       new Date().toISOString(),
-    rating:   rating as "up" | "down",
-    question: question.slice(0, 500),
-    answer:   answer.slice(0, 1000),
-  };
-
-  if (feedbackLog.length >= MAX_FEEDBACK) feedbackLog.shift();
-  feedbackLog.push(entry);
+  try {
+    await db.insert(ucAiFeedbackTable).values({
+      rating:   rating as "up" | "down",
+      question: question.slice(0, 500),
+      answer:   answer.slice(0, 1000),
+    });
+  } catch (err) {
+    console.error("[Alison feedback] DB insert failed:", err);
+    res.status(500).json({ error: "Failed to save feedback" });
+    return;
+  }
 
   // Log low-rated answers so they surface in server logs for review
   if (rating === "down") {
     console.warn("[Alison feedback] Unhelpful answer flagged:", {
-      question: entry.question.slice(0, 120),
-      answer:   entry.answer.slice(0, 120),
+      question: question.slice(0, 120),
+      answer:   answer.slice(0, 120),
     });
   }
 
@@ -307,6 +299,7 @@ router.post("/uc/ai/chat-feedback", (req: Request, res: Response): void => {
 // Query params:
 //   rating=up|down  — filter by rating (omit for all)
 //   limit=N         — max items to return (default 100, max 200)
+//   page=N          — 1-based page number (default 1)
 router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<void> => {
   if (!(await isAdminRequest(req.headers["authorization"]))) {
     res.status(403).json({ error: "Admin access required" });
@@ -314,27 +307,64 @@ router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<
   }
 
   const ratingFilter = req.query["rating"] as string | undefined;
-  const limit = Math.min(200, Math.max(1, parseInt(String(req.query["limit"] ?? "100"), 10) || 100));
+  const limit  = Math.min(200, Math.max(1, parseInt(String(req.query["limit"] ?? "100"), 10) || 100));
+  const page   = Math.max(1, parseInt(String(req.query["page"] ?? "1"), 10) || 1);
+  const offset = (page - 1) * limit;
 
-  // Server-side 7-day aggregate across the FULL log (not the paged slice)
-  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const weekEntries = feedbackLog.filter(e => e.ts >= cutoff);
-  const weekStats = {
-    total: weekEntries.length,
-    up:    weekEntries.filter(e => e.rating === "up").length,
-    down:  weekEntries.filter(e => e.rating === "down").length,
-  };
+  try {
+    // Build query — filter by rating when provided
+    const baseWhere = ratingFilter === "up" || ratingFilter === "down"
+      ? eq(ucAiFeedbackTable.rating, ratingFilter)
+      : undefined;
 
-  const filtered = ratingFilter
-    ? feedbackLog.filter(e => e.rating === ratingFilter)
-    : feedbackLog;
+    const [items, allRows, weekRows] = await Promise.all([
+      // Paged result, newest first
+      db.select()
+        .from(ucAiFeedbackTable)
+        .where(baseWhere)
+        .orderBy(desc(ucAiFeedbackTable.createdAt))
+        .limit(limit)
+        .offset(offset),
 
-  res.json({
-    totalInLog: feedbackLog.length,
-    weekStats,
-    count: filtered.length,
-    items: [...filtered].reverse().slice(0, limit),
-  });
+      // Total count for the filtered set
+      db.select({ id: ucAiFeedbackTable.id, rating: ucAiFeedbackTable.rating })
+        .from(ucAiFeedbackTable)
+        .where(baseWhere),
+
+      // Last-7-day counts (no rating filter so stats are always full-picture)
+      db.select({ id: ucAiFeedbackTable.id, rating: ucAiFeedbackTable.rating, createdAt: ucAiFeedbackTable.createdAt })
+        .from(ucAiFeedbackTable)
+        .where(undefined),
+    ]);
+
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const weekEntries = weekRows.filter(e => new Date(e.createdAt) >= cutoff);
+    const weekStats = {
+      total: weekEntries.length,
+      up:    weekEntries.filter(e => e.rating === "up").length,
+      down:  weekEntries.filter(e => e.rating === "down").length,
+    };
+
+    // Normalise shape to match what the ProjectHub UI already expects
+    const shaped = items.map(e => ({
+      ts:       e.createdAt.toISOString(),
+      rating:   e.rating,
+      question: e.question,
+      answer:   e.answer,
+    }));
+
+    res.json({
+      totalInLog: allRows.length,
+      weekStats,
+      count: allRows.length,
+      items: shaped,
+      page,
+      limit,
+    });
+  } catch (err) {
+    console.error("[Alison feedback] DB read failed:", err);
+    res.status(500).json({ error: "Failed to fetch feedback" });
+  }
 });
 
 export default router;
