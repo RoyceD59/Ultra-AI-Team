@@ -1,10 +1,13 @@
 /**
- * Scheduled jobs for the AI Monitor.
- * Runs a daily push to the Ultra Clear AI orchestrator at 08:00 UTC.
+ * Scheduled jobs for the AI Monitor and maintenance tasks.
+ * - Daily 08:00 UTC: push project report to Ultra Clear AI orchestrator.
+ * - Daily 02:00 UTC: prune old uc_ai_feedback rows beyond retention window.
  */
 import cron from "node-cron";
 import { logger } from "./logger";
 import { generateReport, setLatestReport } from "../routes/ai/monitor";
+import { db, ucAiFeedbackTable } from "@workspace/db";
+import { lt } from "drizzle-orm";
 
 export function startScheduler() {
   // Daily at 08:00 UTC — generate a fresh report and push to the orchestrator
@@ -51,7 +54,31 @@ export function startScheduler() {
     } catch (err) {
       logger.error({ err }, "Scheduler: failed to generate or push report");
     }
-  });
+  }, { timezone: "UTC" });
 
   logger.info("Scheduler: daily AI report job registered (08:00 UTC)");
+
+  // ─── Daily 02:00 UTC: prune old feedback rows ─────────────────────────────
+  // Retention window is configurable via UC_FEEDBACK_RETENTION_DAYS (default 90).
+  // Runs at 02:00 UTC to avoid peak hours.
+  cron.schedule("0 2 * * *", async () => {
+    const retentionDays = Math.max(
+      1,
+      parseInt(process.env["UC_FEEDBACK_RETENTION_DAYS"] ?? "90", 10) || 90,
+    );
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    logger.info({ retentionDays, cutoff }, "Scheduler: pruning old AI feedback rows");
+    try {
+      const deleted = await db
+        .delete(ucAiFeedbackTable)
+        .where(lt(ucAiFeedbackTable.createdAt, cutoff));
+      logger.info({ deleted }, "Scheduler: AI feedback pruning complete");
+    } catch (err) {
+      logger.error({ err }, "Scheduler: AI feedback pruning failed");
+    }
+  }, { timezone: "UTC" });
+
+  logger.info(
+    "Scheduler: daily AI feedback pruning job registered (02:00 UTC, default 90-day retention)",
+  );
 }
