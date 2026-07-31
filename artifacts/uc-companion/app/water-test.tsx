@@ -1,5 +1,16 @@
+/**
+ * Water Test Request screen
+ *
+ * Changes:
+ *  - Email field added — receipt sent directly to submitted address even for guests
+ *  - Receipt reference displayed prominently on success screen
+ *  - WhatsApp copy button retained on success
+ */
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, Platform, Alert, ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
@@ -10,28 +21,36 @@ import MediaPicker, { MediaItem } from '@/components/MediaPicker';
 import { uploadMediaItems } from '@/lib/uploadMedia';
 import { openWhatsApp } from '@/lib/whatsapp';
 
-const WATER_SOURCES = ['Municipal/Tap', 'Borehole', 'Well', 'Rainwater', 'River/Lake', 'Tanker delivery'];
-const CONCERNS = ['Bad taste or odor', 'Discolouration', 'Hardness / scale buildup', 'Skin irritation', 'Gastrointestinal issues', 'General safety check'];
+const WATER_SOURCES = [
+  'Municipal/Tap', 'Borehole', 'Well', 'Rainwater', 'River/Lake', 'Tanker delivery',
+];
+const CONCERNS = [
+  'Bad taste or odor', 'Discolouration', 'Hardness / scale buildup',
+  'Skin irritation', 'Gastrointestinal issues', 'General safety check',
+];
 
 export default function WaterTestScreen() {
-  const colors = useColors();
-  const router = useRouter();
-  const api = useApi();
+  const colors  = useColors();
+  const router  = useRouter();
+  const api     = useApi();
   const { user, token } = useAuth();
-  const [name, setName] = useState(user ? `${user.firstName} ${user.lastName}` : '');
-  const [address, setAddress] = useState('');
-  const [phone, setPhone] = useState('');
-  const [waterSource, setWaterSource] = useState('');
+
+  const [name,             setName]             = useState(user ? `${user.firstName} ${user.lastName}` : '');
+  const [address,          setAddress]          = useState('');
+  const [phone,            setPhone]            = useState('');
+  const [email,            setEmail]            = useState(user?.email ?? '');
+  const [waterSource,      setWaterSource]      = useState('');
   const [selectedConcerns, setSelectedConcerns] = useState<string[]>([]);
-  const [extraConcerns, setExtraConcerns] = useState('');
-  const [media, setMedia] = useState<MediaItem[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [whatsAppSummary, setWhatsAppSummary] = useState('');
+  const [extraConcerns,    setExtraConcerns]    = useState('');
+  const [media,            setMedia]            = useState<MediaItem[]>([]);
+  const [submitting,       setSubmitting]       = useState(false);
+  const [submitted,        setSubmitted]        = useState(false);
+  const [receiptRef,       setReceiptRef]       = useState('');
+  const [whatsAppSummary,  setWhatsAppSummary]  = useState('');
 
   const toggleConcern = (c: string) => {
     setSelectedConcerns(prev =>
-      prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]
+      prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c],
     );
   };
 
@@ -50,17 +69,15 @@ export default function WaterTestScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
-      // Upload to object storage first — the API stores permanent URLs,
-      // not device-local file paths.
       const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
       const concernsText = [...selectedConcerns, extraConcerns].filter(Boolean).join(', ');
       const wt = await api.createWaterTest({
-        name, address, phone, waterSource,
+        name, address, phone, email: email.trim() || undefined, waterSource,
         concerns: concernsText,
         photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
         videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
       });
-      setWhatsAppSummary([
+      const summary = [
         'ULTRA CLEAR — WATER TEST REQUEST',
         `Ref: ${wt.id}`,
         `Name: ${name}`,
@@ -68,25 +85,43 @@ export default function WaterTestScreen() {
         `Address: ${address}`,
         `Water source: ${waterSource}`,
         ...(concernsText ? [`Concerns: ${concernsText}`] : []),
-      ].join('\n'));
+      ].join('\n');
+      setReceiptRef(wt.id);
+      setWhatsAppSummary(summary);
       setSubmitted(true);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Submission failed. Please try again.');
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
     return (
-      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 40 }]}>
+      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 40 }]}>
         <View style={[styles.successIcon, { backgroundColor: colors.successLight }]}>
           <Ionicons name="checkmark-circle" size={52} color={colors.success} />
         </View>
         <Text style={[styles.successTitle, { color: colors.text }]}>Request Submitted!</Text>
+
+        {/* Prominent receipt reference */}
+        <View style={[styles.refBox, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+          <Text style={[styles.refLabel, { color: colors.mutedForeground }]}>Your receipt reference</Text>
+          <Text style={[styles.refNumber, { color: colors.primary }]}>{receiptRef}</Text>
+          <Text style={[styles.refHint, { color: colors.mutedForeground }]}>
+            {email.trim()
+              ? `A receipt has been sent to ${email.trim()}.`
+              : 'Save this number for your records.'}
+          </Text>
+        </View>
+
         <Text style={[styles.successDesc, { color: colors.mutedForeground }]}>
           Our certified technician will contact you within 24 hours to schedule a convenient time for your free water quality test.
         </Text>
-        <TouchableOpacity onPress={() => openWhatsApp(whatsAppSummary)}
-          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+        <TouchableOpacity
+          onPress={() => openWhatsApp(whatsAppSummary)}
+          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}
+        >
           <Ionicons name="logo-whatsapp" size={20} color="#fff" />
           <Text style={styles.doneBtnText}>Send a copy on WhatsApp</Text>
         </TouchableOpacity>
@@ -116,15 +151,22 @@ export default function WaterTestScreen() {
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Details</Text>
         {[
-          { label: 'Full Name', value: name, onChange: setName, placeholder: 'Jane Doe' },
-          { label: 'Address / Location', value: address, onChange: setAddress, placeholder: 'Westlands, Nairobi' },
-          { label: 'Phone Number', value: phone, onChange: setPhone, placeholder: '+254700000000', keyboard: 'phone-pad' as const },
+          { label: 'Full Name *',        value: name,    onChange: setName,    placeholder: 'Jane Doe' },
+          { label: 'Address / Location *', value: address, onChange: setAddress, placeholder: 'Westlands, Nairobi' },
+          { label: 'Phone Number *',     value: phone,   onChange: setPhone,   placeholder: '+254700000000', keyboard: 'phone-pad' as const },
+          { label: 'Email (for receipt)', value: email,  onChange: setEmail,   placeholder: 'jane@example.com', keyboard: 'email-address' as const },
         ].map(f => (
           <View key={f.label} style={styles.field}>
             <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>{f.label}</Text>
-            <TextInput value={f.value} onChangeText={f.onChange} placeholder={f.placeholder}
-              placeholderTextColor={colors.border} keyboardType={f.keyboard}
-              style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]} />
+            <TextInput
+              value={f.value}
+              onChangeText={f.onChange}
+              placeholder={f.placeholder}
+              placeholderTextColor={colors.border}
+              keyboardType={f.keyboard}
+              autoCapitalize={f.keyboard === 'email-address' ? 'none' : 'words'}
+              style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+            />
           </View>
         ))}
       </View>
@@ -135,8 +177,13 @@ export default function WaterTestScreen() {
         <View style={styles.chips}>
           {WATER_SOURCES.map(s => (
             <TouchableOpacity key={s} onPress={() => setWaterSource(s)} activeOpacity={0.8}
-              style={[styles.chip, { backgroundColor: waterSource === s ? colors.primary : colors.surface, borderColor: waterSource === s ? colors.primary : colors.border }]}>
-              <Text style={{ fontSize: 13, color: waterSource === s ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>{s}</Text>
+              style={[styles.chip, {
+                backgroundColor: waterSource === s ? colors.primary : colors.surface,
+                borderColor:     waterSource === s ? colors.primary : colors.border,
+              }]}>
+              <Text style={{ fontSize: 13, color: waterSource === s ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>
+                {s}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -148,24 +195,30 @@ export default function WaterTestScreen() {
         <View style={styles.chips}>
           {CONCERNS.map(c => (
             <TouchableOpacity key={c} onPress={() => toggleConcern(c)} activeOpacity={0.8}
-              style={[styles.chip, { backgroundColor: selectedConcerns.includes(c) ? colors.accent + '20' : colors.surface, borderColor: selectedConcerns.includes(c) ? colors.accent : colors.border }]}>
-              <Text style={{ fontSize: 12, color: selectedConcerns.includes(c) ? colors.accent : colors.mutedForeground, fontWeight: '500' as const }}>{c}</Text>
+              style={[styles.chip, {
+                backgroundColor: selectedConcerns.includes(c) ? colors.accent + '20' : colors.surface,
+                borderColor:     selectedConcerns.includes(c) ? colors.accent : colors.border,
+              }]}>
+              <Text style={{ fontSize: 12, color: selectedConcerns.includes(c) ? colors.accent : colors.mutedForeground, fontWeight: '500' as const }}>
+                {c}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
-        <TextInput value={extraConcerns} onChangeText={setExtraConcerns}
-          placeholder="Any other concerns..." placeholderTextColor={colors.border} multiline numberOfLines={3}
-          style={[styles.textarea, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]} />
+        <TextInput
+          value={extraConcerns}
+          onChangeText={setExtraConcerns}
+          placeholder="Any other concerns..."
+          placeholderTextColor={colors.border}
+          multiline
+          numberOfLines={3}
+          style={[styles.textarea, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+        />
       </View>
 
       {/* Media attachments */}
       <View style={styles.section}>
-        <MediaPicker
-          items={media}
-          onChange={setMedia}
-          maxItems={4}
-          label="Attach Photos & Videos  (optional)"
-        />
+        <MediaPicker items={media} onChange={setMedia} maxItems={4} label="Attach Photos & Videos  (optional)" />
         <Text style={[styles.hint, { color: colors.mutedForeground }]}>
           Photos or short videos of your water sample or source help our technician prepare.
         </Text>
@@ -185,24 +238,28 @@ export default function WaterTestScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 14 },
-  headerTitle: { fontSize: 15, fontWeight: '700' as const },
-  headerSub: { fontSize: 12, marginTop: 2 },
-  section: { gap: 10 },
+  screen:       { flex: 1 },
+  header:       { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 14 },
+  headerTitle:  { fontSize: 15, fontWeight: '700' as const },
+  headerSub:    { fontSize: 12, marginTop: 2 },
+  section:      { gap: 10 },
   sectionTitle: { fontSize: 15, fontWeight: '600' as const },
-  field: { gap: 4 },
-  fieldLabel: { fontSize: 12, fontWeight: '500' as const },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
-  textarea: { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 14, lineHeight: 20, minHeight: 80, textAlignVertical: 'top' },
-  hint: { fontSize: 12, lineHeight: 18 },
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
+  field:        { gap: 4 },
+  fieldLabel:   { fontSize: 12, fontWeight: '500' as const },
+  input:        { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15 },
+  chips:        { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip:         { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
+  textarea:     { borderWidth: 1, borderRadius: 10, padding: 14, fontSize: 14, lineHeight: 20, minHeight: 80, textAlignVertical: 'top' },
+  hint:         { fontSize: 12, lineHeight: 18 },
+  submitBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
-  successIcon: { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
+  successIcon:  { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
   successTitle: { fontSize: 24, fontWeight: '700' as const },
-  successDesc: { fontSize: 15, lineHeight: 24, textAlign: 'center' },
-  doneBtn: { paddingVertical: 14, paddingHorizontal: 48, borderRadius: 12, marginTop: 8 },
-  doneBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  successDesc:  { fontSize: 15, lineHeight: 24, textAlign: 'center' },
+  refBox:       { width: '100%', borderWidth: 1, borderRadius: 12, padding: 16, alignItems: 'center', gap: 4 },
+  refLabel:     { fontSize: 11, fontWeight: '600' as const, letterSpacing: 0.5, textTransform: 'uppercase' },
+  refNumber:    { fontSize: 26, fontWeight: '800' as const, letterSpacing: 1 },
+  refHint:      { fontSize: 11, textAlign: 'center', marginTop: 2 },
+  doneBtn:      { width: '100%', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 48, justifyContent: 'center', alignItems: 'center', marginTop: 4 },
+  doneBtnText:  { color: '#fff', fontSize: 16, fontWeight: '700' as const },
 });

@@ -288,6 +288,7 @@ export function useApi() {
       name: string;
       address: string;
       phone: string;
+      email?: string;
       waterSource: string;
       concerns: string;
       photos?: string[];

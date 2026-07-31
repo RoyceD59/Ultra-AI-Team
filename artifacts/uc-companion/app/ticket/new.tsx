@@ -1,5 +1,17 @@
+/**
+ * New Ticket screen — Multi-product service request.
+ *
+ * Changes from v1:
+ *  - "Bottles & Portable" segment removed (hardware tickets only)
+ *  - Multi-select: the customer can flag multiple products per ticket;
+ *    all are captured in productModel joined with " / " for the API.
+ *  - Success screen shows the ticket reference prominently.
+ */
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Platform, Alert, ActivityIndicator } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, Platform, Alert, ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
@@ -13,14 +25,10 @@ import { openWhatsApp } from '@/lib/whatsapp';
 const CONTACT_TIMES = ['Morning (8am–12pm)', 'Afternoon (12pm–5pm)', 'Evening (5pm–8pm)', 'Any time'];
 
 /**
- * Real 2026 Ultra Clear product catalogue, grouped by segment.
- * "Other" is kept as the catch-all final option.
+ * Product catalogue grouped by segment — Bottles & Portable removed.
+ * Customers submit tickets for filtration hardware, accessories, and solutions.
  */
 const PRODUCT_SEGMENTS: { segment: string; models: string[] }[] = [
-  {
-    segment: 'Bottles & Portable',
-    models: ['Hydra Flux', 'Truva Go', 'Viva Drop', 'Flex', 'Timbo', 'Gym Buddy', 'Survivor Straw', 'Breeze', 'EcoSmart Elite'],
-  },
   {
     segment: 'Home Filters',
     models: ['Sweet Home', 'Counter Reverse Osmosis', 'Electric Pitcher', 'RO Home System'],
@@ -31,7 +39,10 @@ const PRODUCT_SEGMENTS: { segment: string; models: string[] }[] = [
   },
   {
     segment: 'Accessories',
-    models: ['Bottle Filter Cartridge', 'Faucet Filter Cartridge', 'Shower Filter Cartridge', 'Derma Flux Cartridge', 'Survivor Straw Cartridge', 'Filter Shell', 'Bottle Carry Sleeve'],
+    models: [
+      'Bottle Filter Cartridge', 'Faucet Filter Cartridge', 'Shower Filter Cartridge',
+      'Derma Flux Cartridge', 'Survivor Straw Cartridge', 'Filter Shell',
+    ],
   },
   {
     segment: 'Solutions',
@@ -40,21 +51,38 @@ const PRODUCT_SEGMENTS: { segment: string; models: string[] }[] = [
 ];
 
 export default function NewTicketScreen() {
-  const colors = useColors();
-  const router = useRouter();
-  const api = useApi();
+  const colors  = useColors();
+  const router  = useRouter();
+  const api     = useApi();
   const { token } = useAuth();
-  const [productModel, setProductModel] = useState('');
-  const [issue, setIssue] = useState('');
-  const [contactTime, setContactTime] = useState(CONTACT_TIMES[3]!);
-  const [media, setMedia] = useState<MediaItem[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+
+  // Multi-select product models
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [issue,        setIssue]        = useState('');
+  const [contactTime,  setContactTime]  = useState(CONTACT_TIMES[3]!);
+  const [media,        setMedia]        = useState<MediaItem[]>([]);
+  const [submitting,   setSubmitting]   = useState(false);
+  const [submitted,    setSubmitted]    = useState(false);
+  const [ticketRef,    setTicketRef]    = useState('');
   const [whatsAppSummary, setWhatsAppSummary] = useState('');
 
+  function toggleProduct(model: string) {
+    setSelectedProducts(prev =>
+      prev.includes(model) ? prev.filter(p => p !== model) : [...prev, model],
+    );
+  }
+
   async function submit() {
-    if (!productModel || !issue) {
-      Alert.alert('Missing info', 'Please select a product model and describe the issue.');
+    const productModel = selectedProducts.length > 0
+      ? selectedProducts.join(' / ')
+      : 'Other';
+
+    if (selectedProducts.length === 0) {
+      Alert.alert('Select a product', 'Please select at least one product or choose "Other".');
+      return;
+    }
+    if (!issue.trim()) {
+      Alert.alert('Describe the issue', 'Please describe what is happening so our team can help.');
       return;
     }
     if (media.length > 0 && !token) {
@@ -67,8 +95,6 @@ export default function NewTicketScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
-      // Upload to object storage first — the team needs permanent URLs,
-      // not device-local file paths.
       const uploaded = media.length ? await uploadMediaItems(media, api.requestUploadUrl) : [];
       const ticket = await api.createTicket({
         productModel,
@@ -77,36 +103,54 @@ export default function NewTicketScreen() {
         photos: uploaded.filter(m => m.type === 'photo').map(m => m.url),
         videos: uploaded.filter(m => m.type === 'video').map(m => m.url),
       });
-      setWhatsAppSummary([
+      const summary = [
         'ULTRA CLEAR — SERVICE REQUEST',
         `Ref: ${ticket.id}`,
-        `Product: ${productModel}`,
+        `Product(s): ${productModel}`,
         `Issue: ${issue}`,
         `Preferred contact time: ${contactTime}`,
-      ].join('\n'));
+      ].join('\n');
+      setTicketRef(ticket.id);
+      setWhatsAppSummary(summary);
       setSubmitted(true);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed to submit ticket. Please try again.');
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
     return (
-      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 20, padding: 40 }]}>
+      <View style={[styles.screen, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 40 }]}>
         <View style={[styles.successIcon, { backgroundColor: colors.successLight }]}>
           <Ionicons name="checkmark-circle" size={52} color={colors.success} />
         </View>
         <Text style={[styles.successTitle, { color: colors.text }]}>Ticket Submitted!</Text>
+
+        {/* Prominent ticket reference */}
+        <View style={[styles.refBox, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+          <Text style={[styles.refLabel, { color: colors.mutedForeground }]}>Your ticket reference</Text>
+          <Text style={[styles.refNumber, { color: colors.primary }]}>{ticketRef}</Text>
+          <Text style={[styles.refHint, { color: colors.mutedForeground }]}>
+            Save this number — the team will quote it when they contact you.
+          </Text>
+        </View>
+
         <Text style={[styles.successDesc, { color: colors.mutedForeground }]}>
-          Your maintenance ticket has been received. Our team will contact you shortly.
+          Our team will contact you within 24–48 hours. A confirmation has been sent to your registered email.
         </Text>
-        <TouchableOpacity onPress={() => openWhatsApp(whatsAppSummary)}
-          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+        <TouchableOpacity
+          onPress={() => openWhatsApp(whatsAppSummary)}
+          style={[styles.doneBtn, { backgroundColor: '#25D366', flexDirection: 'row', alignItems: 'center', gap: 8 }]}
+        >
           <Ionicons name="logo-whatsapp" size={20} color="#fff" />
           <Text style={styles.doneBtnText}>Send a copy on WhatsApp</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/(tabs)/support')}
-          style={[styles.doneBtn, { backgroundColor: colors.primary }]}>
+        <TouchableOpacity
+          onPress={() => router.push('/(tabs)/support')}
+          style={[styles.doneBtn, { backgroundColor: colors.primary }]}
+        >
           <Text style={styles.doneBtnText}>Done</Text>
         </TouchableOpacity>
       </View>
@@ -119,29 +163,59 @@ export default function NewTicketScreen() {
       contentContainerStyle={{ padding: 16, gap: 20, paddingBottom: Platform.OS === 'web' ? 34 : 40 }}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Product model — grouped by segment */}
+      {/* Product model — multi-select, grouped by segment */}
       <View style={styles.section}>
-        <Text style={[styles.label, { color: colors.text }]}>Product Model *</Text>
+        <Text style={[styles.label, { color: colors.text }]}>
+          Product(s) with Issue{' '}
+          <Text style={[styles.multiHint, { color: colors.mutedForeground }]}>(select all that apply)</Text>
+        </Text>
         {PRODUCT_SEGMENTS.map(seg => (
           <View key={seg.segment} style={styles.segmentBlock}>
             <Text style={[styles.segmentLabel, { color: colors.mutedForeground }]}>{seg.segment}</Text>
             <View style={styles.chips}>
-              {seg.models.map(m => (
-                <TouchableOpacity key={m} onPress={() => setProductModel(m)} activeOpacity={0.8}
-                  style={[styles.chip, { backgroundColor: productModel === m ? colors.primary : colors.surface, borderColor: productModel === m ? colors.primary : colors.border }]}>
-                  <Text style={{ fontSize: 12, color: productModel === m ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>{m}</Text>
-                </TouchableOpacity>
-              ))}
+              {seg.models.map(m => {
+                const selected = selectedProducts.includes(m);
+                return (
+                  <TouchableOpacity key={m} onPress={() => toggleProduct(m)} activeOpacity={0.8}
+                    style={[styles.chip, {
+                      backgroundColor: selected ? colors.primary : colors.surface,
+                      borderColor:     selected ? colors.primary : colors.border,
+                    }]}>
+                    {selected && (
+                      <Ionicons name="checkmark" size={11} color="#fff" style={{ marginRight: 2 }} />
+                    )}
+                    <Text style={{ fontSize: 12, color: selected ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>
+                      {m}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         ))}
         {/* Other — catch-all */}
         <View style={styles.chips}>
-          <TouchableOpacity onPress={() => setProductModel('Other')} activeOpacity={0.8}
-            style={[styles.chip, { backgroundColor: productModel === 'Other' ? colors.primary : colors.surface, borderColor: productModel === 'Other' ? colors.primary : colors.border }]}>
-            <Text style={{ fontSize: 12, color: productModel === 'Other' ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>Other</Text>
-          </TouchableOpacity>
+          {['Other'].map(m => {
+            const selected = selectedProducts.includes(m);
+            return (
+              <TouchableOpacity key={m} onPress={() => toggleProduct(m)} activeOpacity={0.8}
+                style={[styles.chip, {
+                  backgroundColor: selected ? colors.primary : colors.surface,
+                  borderColor:     selected ? colors.primary : colors.border,
+                }]}>
+                {selected && <Ionicons name="checkmark" size={11} color="#fff" style={{ marginRight: 2 }} />}
+                <Text style={{ fontSize: 12, color: selected ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>
+                  {m}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
+        {selectedProducts.length > 0 && (
+          <Text style={[styles.selectionSummary, { color: colors.primary }]}>
+            Selected: {selectedProducts.join(', ')}
+          </Text>
+        )}
       </View>
 
       {/* Issue description */}
@@ -164,8 +238,13 @@ export default function NewTicketScreen() {
         <View style={styles.chips}>
           {CONTACT_TIMES.map(t => (
             <TouchableOpacity key={t} onPress={() => setContactTime(t)} activeOpacity={0.8}
-              style={[styles.chip, { backgroundColor: contactTime === t ? colors.primary : colors.surface, borderColor: contactTime === t ? colors.primary : colors.border }]}>
-              <Text style={{ fontSize: 12, color: contactTime === t ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>{t}</Text>
+              style={[styles.chip, {
+                backgroundColor: contactTime === t ? colors.primary : colors.surface,
+                borderColor:     contactTime === t ? colors.primary : colors.border,
+              }]}>
+              <Text style={{ fontSize: 12, color: contactTime === t ? '#fff' : colors.mutedForeground, fontWeight: '500' as const }}>
+                {t}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -173,12 +252,7 @@ export default function NewTicketScreen() {
 
       {/* Media attachments */}
       <View style={styles.section}>
-        <MediaPicker
-          items={media}
-          onChange={setMedia}
-          maxItems={6}
-          label="Attach Photos & Videos"
-        />
+        <MediaPicker items={media} onChange={setMedia} maxItems={6} label="Attach Photos & Videos" />
         <Text style={[styles.hint, { color: colors.mutedForeground }]}>
           Up to 6 items · Videos capped at 15 seconds · Tap a video thumbnail to preview
         </Text>
@@ -199,20 +273,26 @@ export default function NewTicketScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  section: { gap: 10 },
-  label: { fontSize: 15, fontWeight: '600' as const },
-  segmentBlock: { gap: 6 },
-  segmentLabel: { fontSize: 11, fontWeight: '700' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
-  textarea: { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 14, lineHeight: 21, minHeight: 120, textAlignVertical: 'top' },
-  hint: { fontSize: 12, lineHeight: 18 },
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
-  submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
-  successIcon: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
-  successTitle: { fontSize: 22, fontWeight: '700' as const },
-  successDesc: { fontSize: 14, lineHeight: 21, textAlign: 'center' },
-  doneBtn: { borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, justifyContent: 'center' },
-  doneBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' as const },
+  screen:           { flex: 1 },
+  section:          { gap: 10 },
+  label:            { fontSize: 15, fontWeight: '600' as const },
+  multiHint:        { fontSize: 12, fontWeight: '400' as const },
+  segmentBlock:     { gap: 6 },
+  segmentLabel:     { fontSize: 11, fontWeight: '700' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
+  chips:            { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip:             { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1 },
+  selectionSummary: { fontSize: 12, fontWeight: '500' as const, marginTop: 2 },
+  textarea:         { borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 14, lineHeight: 21, minHeight: 120, textAlignVertical: 'top' },
+  hint:             { fontSize: 12, lineHeight: 18 },
+  submitBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
+  submitBtnText:    { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  successIcon:      { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
+  successTitle:     { fontSize: 22, fontWeight: '700' as const },
+  successDesc:      { fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  refBox:           { width: '100%', borderWidth: 1, borderRadius: 12, padding: 16, alignItems: 'center', gap: 4 },
+  refLabel:         { fontSize: 11, fontWeight: '600' as const, letterSpacing: 0.5, textTransform: 'uppercase' },
+  refNumber:        { fontSize: 22, fontWeight: '800' as const, letterSpacing: 1 },
+  refHint:          { fontSize: 11, textAlign: 'center', marginTop: 2 },
+  doneBtn:          { width: '100%', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, justifyContent: 'center', alignItems: 'center' },
+  doneBtnText:      { color: '#fff', fontSize: 15, fontWeight: '700' as const },
 });

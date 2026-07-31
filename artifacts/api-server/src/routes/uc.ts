@@ -1,5 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { createHash } from "node:crypto";
+import { appendFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __ucRouteDirname = dirname(fileURLToPath(import.meta.url));
+const UC_DATA_DIR = join(__ucRouteDirname, "../../../data");
 import {
   validateCodeForDiscount,
   recordReferralConversion,
@@ -1823,7 +1829,42 @@ router.post("/uc/notify", async (req: Request, res: Response): Promise<void> => 
 // ─── Office notifications ─────────────────────────────────────────────────────
 
 /** Official office inbox for all customer form submissions. */
-const OFFICE_EMAIL = "sales@ucfilters.com";
+const OFFICE_EMAIL  = "sales@ucfilters.com";
+const SERVICE_EMAIL = "service@ucfilters.com";
+
+/**
+ * Append a form submission record to a local JSONL file as a durable backup.
+ * One JSON object per line — safe to append concurrently. Fire-and-forget.
+ */
+async function appendToLocalStore(filename: string, record: Record<string, unknown>): Promise<void> {
+  try {
+    await appendFile(join(UC_DATA_DIR, filename), JSON.stringify(record) + "\n", "utf8");
+  } catch (err) {
+    console.error(`[local-store] append to ${filename} failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Send a plain-text notification to service@ucfilters.com — same delivery chain
+ * as notifyOffice (Resend → SendGrid/SMTP fallback). Fire-and-forget; never throws.
+ */
+async function notifyService(subject: string, lines: string[]): Promise<void> {
+  const text = lines.join("\n");
+  const sent = await sendViaResend({
+    from: "Ultra Clear App <noreply@contacts.ucfilters.com>",
+    to:   SERVICE_EMAIL,
+    subject,
+    text,
+  });
+  if (sent) return;
+  console.error(`[service-notify] Resend unavailable for "${subject}" — falling back`);
+  sendEmail({
+    to: SERVICE_EMAIL, subject, text,
+    html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
+  }).catch(err =>
+    console.error(`[service-notify] email failed for "${subject}":`, err instanceof Error ? err.message : err),
+  );
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1998,6 +2039,55 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
     return;
   }
   const id = `TKT-${Date.now()}`;
+  /** Build the notification lines for a ticket (shared between DB and fallback paths). */
+  function tktNotifyLines(ticketId: string, customerStr: string): string[] {
+    return [
+      `Ticket:        ${ticketId}`,
+      `Product(s):    ${productModel}`,
+      `Issue:         ${issueDescription}`,
+      `Contact time:  ${preferredContactTime ?? "Any time"}`,
+      `Customer:      ${customerStr}`,
+      ...(photoList!.length ? [`Photos:        ${photoList!.join(", ")}`] : []),
+      ...(videoList!.length ? [`Videos:        ${videoList!.join(", ")}`] : []),
+    ];
+  }
+
+  /** Fire all post-submission notifications for a ticket. */
+  function dispatchTktNotifications(ticketId: string): void {
+    getUserContact(userId).then(contact => {
+      const customerStr = contact
+        ? `${contact.firstName ?? ""} ${contact.email ?? ""} ${contact.phone ?? ""}`.trim()
+        : "(guest)";
+      const lines   = tktNotifyLines(ticketId, customerStr);
+      const subject = `New Service Request ${ticketId}: ${productModel}`;
+
+      if (contact?.phone) {
+        sendSms(contact.phone, ticketConfirmationSms({ ticketId, firstName: contact.firstName }));
+      }
+      if (contact?.email) {
+        const receipt = buildTicketConfirmationEmail({
+          ticketId, firstName: contact.firstName, email: contact.email,
+          productModel: productModel ?? "", issueDescription: issueDescription ?? "",
+        });
+        sendEmail({ to: contact.email, ...receipt }).catch(() => {});
+      }
+      notifyOffice(subject, lines).catch(() => {});
+      notifyService(subject, [
+        ...lines,
+        "",
+        `Service type:  Maintenance / Support Ticket`,
+        `Ticket ref:    ${ticketId}`,
+      ]).catch(() => {});
+    }).catch(() => {});
+
+    // Local JSONL backup regardless of login state
+    appendToLocalStore("tickets.jsonl", {
+      id: ticketId, userId, productModel, issueDescription,
+      preferredContactTime: preferredContactTime ?? "Any time",
+      photos: photoList, videos: videoList, submittedAt: new Date().toISOString(),
+    });
+  }
+
   try {
     const [ticket] = await db.insert(ucTicketsTable).values({
       id,
@@ -2008,29 +2098,7 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       photos: photoList,
       videos: videoList,
     }).returning();
-    // SMS + email confirmation (fire-and-forget)
-    getUserContact(userId).then(contact => {
-      if (contact?.phone) {
-        sendSms(contact.phone, ticketConfirmationSms({ ticketId: ticket.id, firstName: contact.firstName }));
-      }
-      if (contact?.email) {
-        const receipt = buildTicketConfirmationEmail({
-          ticketId: ticket.id, firstName: contact.firstName, email: contact.email,
-          productModel: ticket.productModel, issueDescription: ticket.issueDescription,
-        });
-        sendEmail({ to: contact.email, ...receipt });
-      }
-      // Full form copy to the office inbox
-      notifyOffice(`New Service Request ${ticket.id}: ${ticket.productModel}`, [
-        `Ticket:        ${ticket.id}`,
-        `Product:       ${ticket.productModel}`,
-        `Issue:         ${ticket.issueDescription}`,
-        `Contact time:  ${ticket.preferredContactTime}`,
-        `Customer:      ${contact ? `${contact.firstName ?? ""} ${contact.email ?? ""} ${contact.phone ?? ""}`.trim() : "(guest)"}`,
-        ...(photoList.length ? [`Photos:        ${photoList.join(", ")}`] : []),
-        ...(videoList.length ? [`Videos:        ${videoList.join(", ")}`] : []),
-      ]).catch(() => {});
-    }).catch(() => {});
+    dispatchTktNotifications(ticket.id);
     res.status(201).json(ticket);
   } catch (err) {
     console.error("[tickets] DB insert failed, using fallback:", err);
@@ -2043,29 +2111,7 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       createdAt: new Date().toISOString(),
     };
     ticketStoreFallback.push(fallback);
-    // SMS + email confirmation (fire-and-forget, fallback path)
-    getUserContact(userId).then(contact => {
-      if (contact?.phone) {
-        sendSms(contact.phone, ticketConfirmationSms({ ticketId: id, firstName: contact.firstName }));
-      }
-      if (contact?.email) {
-        const receipt = buildTicketConfirmationEmail({
-          ticketId: id, firstName: contact.firstName, email: contact.email,
-          productModel: productModel ?? "", issueDescription: issueDescription ?? "",
-        });
-        sendEmail({ to: contact.email, ...receipt });
-      }
-      // Full form copy to the office inbox
-      notifyOffice(`New Service Request ${id}: ${productModel}`, [
-        `Ticket:        ${id}`,
-        `Product:       ${productModel}`,
-        `Issue:         ${issueDescription}`,
-        `Contact time:  ${preferredContactTime ?? "Any time"}`,
-        `Customer:      ${contact ? `${contact.firstName ?? ""} ${contact.email ?? ""} ${contact.phone ?? ""}`.trim() : "(guest)"}`,
-        ...(photoList.length ? [`Photos:        ${photoList.join(", ")}`] : []),
-        ...(videoList.length ? [`Videos:        ${videoList.join(", ")}`] : []),
-      ]).catch(() => {});
-    }).catch(() => {});
+    dispatchTktNotifications(id);
     res.status(201).json(fallback);
   }
 });
@@ -2073,10 +2119,11 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
 // ─── Water Tests ──────────────────────────────────────────────────────────────
 router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void> => {
   const userId = userIdFromBearer(req.headers["authorization"]);
-  const { name, address, phone, waterSource, concerns, photos, videos } = req.body as {
+  const { name, address, phone, email: formEmail, waterSource, concerns, photos, videos } = req.body as {
     name?: string;
     address?: string;
     phone?: string;
+    email?: string;
     waterSource?: string;
     concerns?: string;
     photos?: string[];
@@ -2101,41 +2148,78 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
     return;
   }
   const id = `WT-${Date.now()}`;
+  const firstName = name.split(" ")[0] ?? name;
+
+  /** Build the notification lines (shared between DB path and fallback path). */
+  function wtNotifyLines(testId: string): string[] {
+    return [
+      `Request:      ${testId}`,
+      `Name:         ${name}`,
+      `Phone:        ${phone}`,
+      ...(formEmail ? [`Email:        ${formEmail}`] : []),
+      `Address:      ${address}`,
+      `Water source: ${waterSource ?? "Municipal"}`,
+      `Concerns:     ${concerns || "(none given)"}`,
+      ...(photoList!.length ? [`Photos:       ${photoList!.join(", ")}`] : []),
+      ...(videoList!.length ? [`Videos:       ${videoList!.join(", ")}`] : []),
+    ];
+  }
+
+  /** Send all post-submission notifications (fire-and-forget). */
+  function dispatchWtNotifications(testId: string): void {
+    const lines = wtNotifyLines(testId);
+    const subject = `New Water Test Request ${testId}: ${name}`;
+
+    // SMS to the phone number given in the form
+    sendSms(phone!, waterTestConfirmationSms({ testId, address: address!, firstName }));
+
+    // Receipt email to submitted address (always, regardless of login)
+    const emailTarget = formEmail?.trim() || null;
+    if (emailTarget) {
+      const receipt = buildWaterTestConfirmationEmail({
+        testId, firstName, email: emailTarget,
+        address: address!, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
+      });
+      sendEmail({ to: emailTarget, ...receipt }).catch(() => {});
+    }
+
+    // If logged in, also send to registered account email (may differ from form email)
+    getUserContact(userId).then(contact => {
+      if (contact?.email && contact.email !== emailTarget) {
+        const receipt = buildWaterTestConfirmationEmail({
+          testId, firstName: contact.firstName, email: contact.email,
+          address: address!, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
+        });
+        sendEmail({ to: contact.email, ...receipt }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // Full copy to sales@ucfilters.com (office) and service@ucfilters.com
+    notifyOffice(subject, lines).catch(() => {});
+    notifyService(subject, [
+      ...lines,
+      "",
+      `Service type: Water Quality Test`,
+      `Ticket:       ${testId}`,
+    ]).catch(() => {});
+
+    // Local JSONL backup for retrieval without DB access
+    appendToLocalStore("water-tests.jsonl", {
+      id: testId, name, phone, email: formEmail ?? null, address,
+      waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
+      photos: photoList, videos: videoList, submittedAt: new Date().toISOString(),
+    });
+  }
+
   try {
     const [wt] = await db.insert(ucWaterTestsTable).values({
-      id,
-      userId,
-      name,
-      address,
-      phone,
+      id, userId, name, address, phone,
       waterSource: waterSource ?? "Municipal",
       concerns:    concerns ?? "",
       photos:      photoList,
       videos:      videoList,
     }).returning();
-    // SMS + email confirmation — phone submitted in form (fire-and-forget)
-    const firstName = name.split(" ")[0] ?? name;
-    sendSms(phone, waterTestConfirmationSms({ testId: wt.id, address, firstName }));
-    // Full form copy to the office inbox
-    notifyOffice(`New Water Test Request ${wt.id}: ${name}`, [
-      `Request:      ${wt.id}`,
-      `Name:         ${name}`,
-      `Phone:        ${phone}`,
-      `Address:      ${address}`,
-      `Water source: ${waterSource ?? "Municipal"}`,
-      `Concerns:     ${concerns || "(none given)"}`,
-      ...(photoList.length ? [`Photos:       ${photoList.join(", ")}`] : []),
-      ...(videoList.length ? [`Videos:       ${videoList.join(", ")}`] : []),
-    ]).catch(() => {});
-    getUserContact(userId).then(contact => {
-      if (contact?.email) {
-        const receipt = buildWaterTestConfirmationEmail({
-          testId: wt.id, firstName: contact.firstName, email: contact.email,
-          address, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
-        });
-        sendEmail({ to: contact.email, ...receipt });
-      }
-    }).catch(() => {});
+    dispatchWtNotifications(wt.id);
     res.status(201).json(wt);
   } catch (err) {
     console.error("[water-tests] DB insert failed, using fallback:", err);
@@ -2149,29 +2233,7 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
       createdAt:   new Date().toISOString(),
     };
     waterTestStoreFallback.push(fallback);
-    // SMS + email confirmation (fire-and-forget, fallback path)
-    const firstName2 = name.split(" ")[0] ?? name;
-    sendSms(phone, waterTestConfirmationSms({ testId: id, address, firstName: firstName2 }));
-    // Full form copy to the office inbox
-    notifyOffice(`New Water Test Request ${id}: ${name}`, [
-      `Request:      ${id}`,
-      `Name:         ${name}`,
-      `Phone:        ${phone}`,
-      `Address:      ${address}`,
-      `Water source: ${waterSource ?? "Municipal"}`,
-      `Concerns:     ${concerns || "(none given)"}`,
-      ...(photoList.length ? [`Photos:       ${photoList.join(", ")}`] : []),
-      ...(videoList.length ? [`Videos:       ${videoList.join(", ")}`] : []),
-    ]).catch(() => {});
-    getUserContact(userId).then(contact => {
-      if (contact?.email) {
-        const receipt = buildWaterTestConfirmationEmail({
-          testId: id, firstName: contact.firstName, email: contact.email,
-          address, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
-        });
-        sendEmail({ to: contact.email, ...receipt });
-      }
-    }).catch(() => {});
+    dispatchWtNotifications(id);
     res.status(201).json(fallback);
   }
 });
