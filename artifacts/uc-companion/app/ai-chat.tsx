@@ -6,6 +6,8 @@
  *  - Follow-up suggestion chips after every AI reply
  *  - Auto-complete chips above input bar while typing
  *  - Animated typing indicator
+ *  - 👍 / 👎 rating on every AI bubble → thumbs-down auto-retries
+ *  - Rated answers sent to /api/uc/ai/chat-feedback (knowledge base)
  *  - Context-aware greeting when opened from Filter Tracker
  */
 import React, {
@@ -24,11 +26,16 @@ import * as Haptics from 'expo-haptics';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+type Rating = 'up' | 'down';
+
 interface Message {
-  id:          string;
-  role:        'user' | 'assistant';
-  content:     string;
-  suggestions?: string[];   // follow-up chips shown below an assistant bubble
+  id:           string;
+  role:         'user' | 'assistant';
+  content:      string;
+  suggestions?: string[];   // follow-up chips shown below the bubble
+  rating?:      Rating;     // after user rates this message
+  noRating?:    boolean;    // greeting / error messages — skip rating row
+  retryOf?:     string;     // id of the message this is a retry for
 }
 
 interface FilterContext {
@@ -39,8 +46,7 @@ interface FilterContext {
   cleanCount?:    number;
 }
 
-// ── Static autocomplete pool ──────────────────────────────────────────────────
-// Shown as chips above the input bar when the user types 3+ matching chars.
+// ── Autocomplete pool ─────────────────────────────────────────────────────────
 
 const AUTOCOMPLETE_POOL = [
   "Why does my water smell like chlorine?",
@@ -85,7 +91,6 @@ function buildContextGreeting(ctx: FilterContext): string {
     };
     parts.push(labels[ctx.waterSource] ?? ctx.waterSource);
   }
-
   const context = parts.length > 0 ? `I can see you have ${parts.join(', ')}. ` : '';
   return `Hi, I'm Alison 👋\n\n${context}What's on your mind? Whether it's water taste, filter performance, or when to replace — I'm here to help.`;
 }
@@ -94,7 +99,9 @@ function buildInitialSuggestions(ctx: FilterContext): string[] {
   if (ctx.productName) {
     return [
       `How do I clean my ${ctx.productName}?`,
-      ctx.waterSource === 'borehole' ? 'Does my filter handle iron in borehole water?' : 'Why does my water still taste of chlorine?',
+      ctx.waterSource === 'borehole'
+        ? 'Does my filter handle iron in borehole water?'
+        : 'Why does my water still taste of chlorine?',
       'When should I replace my cartridge?',
     ];
   }
@@ -108,9 +115,11 @@ function buildInitialSuggestions(ctx: FilterContext): string[] {
 // ── Animated typing dots ──────────────────────────────────────────────────────
 
 function TypingDots({ color }: { color: string }) {
-  const dots = [useRef(new Animated.Value(0)).current,
-                useRef(new Animated.Value(0)).current,
-                useRef(new Animated.Value(0)).current];
+  const dots = [
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+  ];
 
   useEffect(() => {
     const anims = dots.map((dot, i) =>
@@ -133,7 +142,10 @@ function TypingDots({ color }: { color: string }) {
       {dots.map((dot, i) => (
         <Animated.View
           key={i}
-          style={[styles.dot, { backgroundColor: color, transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }] }]}
+          style={[
+            styles.dot,
+            { backgroundColor: color, transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }] },
+          ]}
         />
       ))}
     </View>
@@ -149,7 +161,7 @@ export default function AiChatScreen() {
 
   const params = useLocalSearchParams<{
     productName?: string; daysRemaining?: string;
-    waterSource?: string; lastCheckIn?:   string; cleanCount?: string;
+    waterSource?: string; lastCheckIn?: string; cleanCount?: string;
   }>();
 
   const filterContext: FilterContext = {
@@ -160,24 +172,25 @@ export default function AiChatScreen() {
     cleanCount:    params.cleanCount    ? Number(params.cleanCount)    : undefined,
   };
 
-  const hasContext        = Boolean(filterContext.productName || filterContext.waterSource);
-  const initialGreeting   = hasContext ? buildContextGreeting(filterContext) : GENERIC_GREETING;
+  const hasContext         = Boolean(filterContext.productName || filterContext.waterSource);
+  const initialGreeting    = hasContext ? buildContextGreeting(filterContext) : GENERIC_GREETING;
   const initialSuggestions = buildInitialSuggestions(filterContext);
 
   const [messages, setMessages] = useState<Message[]>([
-    { id: 'greeting', role: 'assistant', content: initialGreeting, suggestions: initialSuggestions },
+    { id: 'greeting', role: 'assistant', content: initialGreeting, suggestions: initialSuggestions, noRating: true },
   ]);
-  const [input,          setInput]          = useState('');
-  const [sending,        setSending]        = useState(false);
-  const listRef = useRef<FlatList<Message>>(null);
+  const [input,   setInput]   = useState('');
+  const [sending, setSending] = useState(false);
+  // Track which message id is currently being retried (shows "Trying again…" state)
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
+  const listRef = useRef<FlatList<Message>>(null);
   const scrollToBottom = useCallback(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
-
   useEffect(() => { scrollToBottom(); }, [messages.length, scrollToBottom]);
 
-  // ── Autocomplete ─────────────────────────────────────────────────────────────
+  // ── Autocomplete ───────────────────────────────────────────────────────────
 
   const autocomplete = useMemo(() => {
     const q = input.trim().toLowerCase();
@@ -185,7 +198,7 @@ export default function AiChatScreen() {
     return AUTOCOMPLETE_POOL.filter(s => s.toLowerCase().includes(q)).slice(0, 3);
   }, [input]);
 
-  // ── Send ─────────────────────────────────────────────────────────────────────
+  // ── Send ──────────────────────────────────────────────────────────────────
 
   async function handleSend(textOverride?: string) {
     const text = (textOverride ?? input).trim();
@@ -214,19 +227,85 @@ export default function AiChatScreen() {
       }]);
     } catch {
       setMessages(prev => [...prev, {
-        id:      `err-${Date.now()}`,
-        role:    'assistant',
-        content: "I'm having a little trouble connecting right now. Please try again in a moment, or reach UCFilters support at +254 700 000 000 or support@ucfilters.co.ke.",
+        id:       `err-${Date.now()}`,
+        role:     'assistant',
+        content:  "I'm having a little trouble connecting right now. Please try again in a moment, or reach UCFilters support at +254 700 000 000.",
+        noRating: true,
       }]);
     } finally {
       setSending(false);
     }
   }
 
-  // ── Render message ────────────────────────────────────────────────────────────
+  // ── Retry (after thumbs-down) ─────────────────────────────────────────────
+
+  async function handleRetry(ratedMsgId: string) {
+    if (sending || retryingId) return;
+    setRetryingId(ratedMsgId);
+
+    // Build history up to (and including) the last user message before the rated reply
+    const idx = messages.findIndex(m => m.id === ratedMsgId);
+    const historySlice = messages
+      .slice(0, idx)
+      .filter(m => m.id !== 'greeting')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    // historySlice must end with a user message — find the last one
+    const lastUserIdx = [...historySlice].reverse().findIndex(m => m.role === 'user');
+    if (lastUserIdx === -1) { setRetryingId(null); return; }
+    const history = historySlice.slice(0, historySlice.length - lastUserIdx);
+
+    try {
+      const { reply, suggestions } = await api.waterAiChat(history, filterContext, true);
+      setMessages(prev => [...prev, {
+        id:          `a-retry-${Date.now()}`,
+        role:        'assistant',
+        content:     reply,
+        suggestions: suggestions?.length ? suggestions : undefined,
+        retryOf:     ratedMsgId,
+      }]);
+    } catch {
+      setMessages(prev => [...prev, {
+        id:       `err-retry-${Date.now()}`,
+        role:     'assistant',
+        content:  "Still having trouble. Please try again or contact UCFilters support.",
+        noRating: true,
+      }]);
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
+  // ── Rating ────────────────────────────────────────────────────────────────
+
+  async function handleRate(msg: Message, rating: Rating) {
+    if (msg.rating) return; // already rated
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+
+    // Optimistically update UI
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, rating } : m));
+
+    // Find the user question just before this message
+    const idx = messages.findIndex(m => m.id === msg.id);
+    const questionMsg = [...messages.slice(0, idx)].reverse().find(m => m.role === 'user');
+
+    // Log to knowledge base (fire-and-forget)
+    api.chatFeedback(rating, questionMsg?.content ?? '', msg.content).catch(() => {});
+
+    // Thumbs-down → auto-retry with a different approach
+    if (rating === 'down') {
+      await handleRetry(msg.id);
+    }
+  }
+
+  // ── Render message ────────────────────────────────────────────────────────
 
   function renderMessage({ item }: { item: Message }) {
-    const isUser = item.role === 'user';
+    const isUser        = item.role === 'user';
+    const showRating    = !isUser && !item.noRating;
+    const isRetryingThis = retryingId === item.id;
+
     return (
       <View style={styles.msgGroup}>
         <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
@@ -247,15 +326,51 @@ export default function AiChatScreen() {
           </View>
         </View>
 
-        {/* Follow-up suggestion chips — assistant only */}
-        {!isUser && item.suggestions && item.suggestions.length > 0 && (
+        {/* ── Rating row + retry feedback ──────────────────────────────── */}
+        {showRating && (
+          <View style={[styles.ratingRow, { marginLeft: 36 }]}>
+            {isRetryingThis ? (
+              <Text style={[styles.ratingHint, { color: colors.mutedForeground }]}>
+                ↻ Trying a different approach…
+              </Text>
+            ) : item.rating === 'up' ? (
+              <Text style={[styles.ratingHint, { color: '#22c55e' }]}>✓ Glad that helped!</Text>
+            ) : item.rating === 'down' ? (
+              <Text style={[styles.ratingHint, { color: colors.mutedForeground }]}>
+                Thanks — see my next response ↓
+              </Text>
+            ) : (
+              <>
+                <Text style={[styles.ratingLabel, { color: colors.mutedForeground }]}>Helpful?</Text>
+                <TouchableOpacity
+                  onPress={() => handleRate(item, 'up')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={[styles.ratingBtn, { borderColor: colors.border }]}>
+                  <Ionicons name="thumbs-up-outline" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleRate(item, 'down')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={[styles.ratingBtn, { borderColor: colors.border }]}>
+                  <Ionicons name="thumbs-down-outline" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+
+        {/* ── Follow-up suggestion chips ───────────────────────────────── */}
+        {!isUser && !isRetryingThis && item.suggestions && item.suggestions.length > 0 && (
           <View style={[styles.chipRow, { marginLeft: 36 }]}>
             {item.suggestions.map(s => (
               <TouchableOpacity
                 key={s}
                 onPress={() => handleSend(s)}
                 activeOpacity={0.75}
-                style={[styles.followChip, { borderColor: colors.primary + '55', backgroundColor: colors.primaryLight + '55' }]}>
+                style={[styles.followChip, {
+                  borderColor:     colors.primary + '55',
+                  backgroundColor: colors.primaryLight + '55',
+                }]}>
                 <Text style={[styles.followChipText, { color: colors.primary }]} numberOfLines={2}>{s}</Text>
               </TouchableOpacity>
             ))}
@@ -270,7 +385,7 @@ export default function AiChatScreen() {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['bottom']}>
 
-      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      {/* ── Header ────────────────────────────────────────────────────────── */}
       <View style={[styles.header, { backgroundColor: colors.card, borderColor: colors.border, marginTop: topPad }]}>
         <TouchableOpacity
           onPress={() => router.back()}
@@ -290,7 +405,7 @@ export default function AiChatScreen() {
         </View>
       </View>
 
-      {/* ── Messages + input ─────────────────────────────────────────────────── */}
+      {/* ── Messages + input ──────────────────────────────────────────────── */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -305,12 +420,14 @@ export default function AiChatScreen() {
           showsVerticalScrollIndicator={false}
           onContentSizeChange={scrollToBottom}
           ListFooterComponent={
-            sending ? (
+            (sending && !retryingId) ? (
               <View style={[styles.msgRow, { marginTop: 4 }]}>
                 <View style={[styles.avatar, { backgroundColor: colors.primaryLight }]}>
                   <Text style={styles.avatarLetter}>A</Text>
                 </View>
-                <View style={[styles.bubble, styles.bubbleAI, { backgroundColor: colors.surface, borderColor: colors.border, paddingVertical: 14 }]}>
+                <View style={[styles.bubble, styles.bubbleAI, {
+                  backgroundColor: colors.surface, borderColor: colors.border, paddingVertical: 14,
+                }]}>
                   <TypingDots color={colors.mutedForeground} />
                 </View>
               </View>
@@ -318,13 +435,13 @@ export default function AiChatScreen() {
           }
         />
 
-        {/* ── Autocomplete strip ─────────────────────────────────────────────── */}
+        {/* ── Autocomplete strip ──────────────────────────────────────────── */}
         {autocomplete.length > 0 && (
           <View style={[styles.autocompleteBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {autocomplete.map(s => (
               <TouchableOpacity
                 key={s}
-                onPress={() => { setInput(s); }}
+                onPress={() => setInput(s)}
                 activeOpacity={0.75}
                 style={[styles.autocompleteChip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                 <Ionicons name="search-outline" size={11} color={colors.mutedForeground} style={{ marginRight: 4 }} />
@@ -334,7 +451,7 @@ export default function AiChatScreen() {
           </View>
         )}
 
-        {/* ── Input bar ─────────────────────────────────────────────────────── */}
+        {/* ── Input bar ──────────────────────────────────────────────────── */}
         <View style={[styles.inputBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TextInput
             value={input}
@@ -349,11 +466,11 @@ export default function AiChatScreen() {
           />
           <TouchableOpacity
             onPress={() => handleSend()}
-            disabled={!input.trim() || sending}
+            disabled={!input.trim() || sending || !!retryingId}
             activeOpacity={0.8}
             style={[
               styles.sendBtn,
-              { backgroundColor: input.trim() && !sending ? colors.primary : colors.border },
+              { backgroundColor: input.trim() && !sending && !retryingId ? colors.primary : colors.border },
             ]}>
             <Ionicons name="send" size={17} color="#fff" />
           </TouchableOpacity>
@@ -366,7 +483,7 @@ export default function AiChatScreen() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe:   { flex: 1 },
+  safe: { flex: 1 },
 
   header:           { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 11, borderBottomWidth: 1 },
   backBtn:          { padding: 2 },
@@ -377,10 +494,9 @@ const styles = StyleSheet.create({
   onlineDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#22c55e' },
   headerSub:        { fontSize: 12 },
 
-  list:     { padding: 16, paddingBottom: 12, gap: 10 },
-
-  msgGroup: { gap: 6 },
-  msgRow:   { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  list:       { padding: 16, paddingBottom: 12, gap: 10 },
+  msgGroup:   { gap: 6 },
+  msgRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   msgRowUser: { flexDirection: 'row-reverse' },
 
   avatar:       { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
@@ -391,10 +507,16 @@ const styles = StyleSheet.create({
   bubbleAI:   { borderTopLeftRadius: 4 },
   bubbleText: { fontSize: 14, lineHeight: 22 },
 
-  // Follow-up chips (below assistant bubble)
-  chipRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  followChip:      { borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, paddingVertical: 6, maxWidth: 240 },
-  followChipText:  { fontSize: 12, fontWeight: '500' as const, lineHeight: 16 },
+  // Rating row
+  ratingRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 24 },
+  ratingLabel:{ fontSize: 11, opacity: 0.7 },
+  ratingBtn:  { borderWidth: 1, borderRadius: 14, padding: 5 },
+  ratingHint: { fontSize: 11, fontStyle: 'italic' },
+
+  // Follow-up chips
+  chipRow:        { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  followChip:     { borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, paddingVertical: 6, maxWidth: 240 },
+  followChipText: { fontSize: 12, fontWeight: '500' as const, lineHeight: 16 },
 
   // Autocomplete strip
   autocompleteBar:  { borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 6, gap: 6, flexDirection: 'column' },

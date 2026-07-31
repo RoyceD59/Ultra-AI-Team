@@ -375,6 +375,14 @@ export function useApi() {
         lastCheckIn?:   string;
         cleanCount?:    number;
       },
-    ) => post<{ reply: string; suggestions: string[] }>('/api/uc/ai/water-chat', { messages, filterContext }),
+      isRetry?: boolean,
+    ) => post<{ reply: string; suggestions: string[] }>('/api/uc/ai/water-chat', { messages, filterContext, isRetry }),
+
+    /** Submit a thumbs-up or thumbs-down rating for an Alison response. */
+    chatFeedback: (
+      rating:   'up' | 'down',
+      question: string,
+      answer:   string,
+    ) => post<{ ok: boolean }>('/api/uc/ai/chat-feedback', { rating, question, answer }),
   };
 }
