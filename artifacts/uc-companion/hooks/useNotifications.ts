@@ -349,6 +349,49 @@ export async function cancelAllFilterNotifications(): Promise<void> {
   } catch {}
 }
 
+/**
+ * Syncs an existing activation's lifespanDays with the latest catalogue value.
+ *
+ * Called each time useFilterProducts returns a fresh (non-fallback) product list.
+ * If the catalogue has corrected a product's lifespan since the user registered,
+ * this reschedules all notifications using the new lifespan while preserving the
+ * original activation date and all other stored fields (performance history, etc.).
+ *
+ * Returns the updated FilterActivation when a change was applied, or null when:
+ *   – no activation is stored
+ *   – the registered product is not found in the catalogue (offline / mismatch)
+ *   – the lifespan matches — no update needed
+ */
+export async function syncActivationWithCatalogue(
+  catalogueProducts: Array<{ id: number; lifespanDays: number; name: string }>
+): Promise<FilterActivation | null> {
+  if (catalogueProducts.length === 0) return null;
+
+  const existing = await getFilterActivation();
+  if (!existing) return null;
+
+  const catalogueProduct = catalogueProducts.find(p => p.id === existing.productId);
+  if (!catalogueProduct) return null;
+
+  if (catalogueProduct.lifespanDays === existing.lifespanDays) return null;
+
+  // Lifespan has changed in the catalogue — reschedule with the corrected value,
+  // preserving the original activation date so elapsed-time calculations stay correct.
+  const updated = await scheduleAllFilterNotifications({
+    activatedAt:     existing.activatedAt,
+    productId:       existing.productId,
+    productName:     catalogueProduct.name,
+    lifespanDays:    catalogueProduct.lifespanDays,
+    cleanCount:      existing.cleanCount,
+    lastCleanedAt:   existing.lastCleanedAt,
+    lastWaterSource: existing.lastWaterSource,
+    lastCheckIn:     existing.lastCheckIn,
+    checkIns:        existing.checkIns,
+  });
+
+  return updated;
+}
+
 /** Remove the filter activation record (call when user resets / unregisters filter). */
 export async function clearFilterActivation(): Promise<void> {
   await cancelAllFilterNotifications();

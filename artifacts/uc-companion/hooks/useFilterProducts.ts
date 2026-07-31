@@ -79,12 +79,24 @@ async function readCache(): Promise<FilterProduct[] | null> {
   } catch { return null; }
 }
 
+/** Where the currently returned product list originated. */
+export type FilterProductSource = 'live' | 'cache' | 'fallback';
+
 /**
  * Hook returning the trackable filter products.
  * Shows the cache (or static fallback) immediately, then refreshes from the
  * API in the background and re-renders when fresh data arrives.
+ *
+ * `source` indicates the origin of the current list:
+ *   'live'     — just fetched successfully from the API
+ *   'cache'    — loaded from AsyncStorage (API not yet reached or offline)
+ *   'fallback' — neither API nor cache available; using bundled snapshot
  */
-export function useFilterProducts(): { products: FilterProduct[]; loading: boolean } {
+export function useFilterProducts(): {
+  products: FilterProduct[];
+  loading: boolean;
+  source: FilterProductSource;
+} {
   const api = useApi();
   // useApi returns fresh function identities each render; keep the latest in a
   // ref so the fetch effect runs once without capturing a stale closure.
@@ -93,6 +105,7 @@ export function useFilterProducts(): { products: FilterProduct[]; loading: boole
 
   const [products, setProducts] = useState<FilterProduct[]>(FALLBACK_FILTER_PRODUCTS);
   const [loading, setLoading]   = useState(true);
+  const [source, setSource]     = useState<FilterProductSource>('fallback');
 
   useEffect(() => {
     let cancelled = false;
@@ -100,21 +113,27 @@ export function useFilterProducts(): { products: FilterProduct[]; loading: boole
     (async () => {
       // 1. Cached copy first, so the picker is instantly usable offline
       const cached = await readCache();
-      if (cached && !cancelled) setProducts(cached);
+      if (cached && !cancelled) {
+        setProducts(cached);
+        setSource('cache');
+      }
 
       // 2. Refresh from the live catalogue
       try {
         const fresh = toFilterProducts(await getProductsRef.current());
         if (fresh.length > 0) {
-          if (!cancelled) setProducts(fresh);
+          if (!cancelled) {
+            setProducts(fresh);
+            setSource('live');
+          }
           try { await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)); } catch { /* cache write is best-effort */ }
         }
-      } catch { /* offline — cached / fallback list stays */ }
+      } catch { /* offline — cached / fallback list stays; source unchanged */ }
       if (!cancelled) setLoading(false);
     })();
 
     return () => { cancelled = true; };
   }, []);
 
-  return { products, loading };
+  return { products, loading, source };
 }

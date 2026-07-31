@@ -12,7 +12,7 @@
  *   Step 2 — pick how many days ago it was installed
  *   Confirm → scheduleAllFilterNotifications
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView,
   Platform, ActivityIndicator,
@@ -29,6 +29,7 @@ import {
   getNotificationPermissionStatus,
   requestNotificationPermission,
   effectiveLifespanDays,
+  syncActivationWithCatalogue,
   type PerfRecommendation,
 } from '@/hooks/useNotifications';
 import PerformanceCheckInModal from '@/components/PerformanceCheckInModal';
@@ -84,6 +85,26 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
   const router = useRouter();
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showPerfModal,     setShowPerfModal]     = useState(false);
+
+  // Fetch the live catalogue here so the sync effect and the registration modal
+  // share the same data without triggering two independent API calls.
+  const { products: filterProducts, loading: productsLoading, source: productsSource } = useFilterProducts();
+
+  // ── Catalogue lifespan sync ──────────────────────────────────────────────────
+  // Runs only when the product list came directly from the live API ('live').
+  // Cache and fallback data must never overwrite a stored activation — they may
+  // themselves be stale and would corrupt the reminder schedule offline.
+  const lastSyncedProductsRef = useRef<typeof filterProducts | null>(null);
+  useEffect(() => {
+    if (productsSource !== 'live') return;  // offline/cache/fallback — hard no-op
+    if (!activation)               return;  // nothing registered — no sync needed
+    if (filterProducts === lastSyncedProductsRef.current) return; // same reference, skip
+    lastSyncedProductsRef.current = filterProducts;
+
+    syncActivationWithCatalogue(filterProducts).then(updated => {
+      if (updated) onActivationChange(updated);
+    });
+  }, [filterProducts, productsSource, activation, onActivationChange]);
 
   function openRegisterModal() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -257,6 +278,8 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
       <RegisterModal
         visible={showRegisterModal}
         existingActivation={activation}
+        filterProducts={filterProducts}
+        productsLoading={productsLoading}
         onClose={() => setShowRegisterModal(false)}
         onSave={a => { onActivationChange(a); setShowRegisterModal(false); }}
       />
@@ -279,17 +302,18 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
 interface ModalProps {
   visible: boolean;
   existingActivation: FilterActivation | null;
+  filterProducts: ReturnType<typeof useFilterProducts>['products'];
+  productsLoading: boolean;
   onClose: () => void;
   onSave: (a: FilterActivation) => void;
 }
 
-function RegisterModal({ visible, existingActivation, onClose, onSave }: ModalProps) {
+function RegisterModal({ visible, existingActivation, filterProducts, productsLoading, onClose, onSave }: ModalProps) {
   const colors = useColors();
   const [step, setStep]         = useState<1 | 2>(1);
   const [productId, setProductId]     = useState<number | null>(null);
   const [dayOffset, setDayOffset]     = useState(0);
   const [saving, setSaving]     = useState(false);
-  const { products: filterProducts, loading: productsLoading } = useFilterProducts();
 
   const reset = useCallback(() => {
     setStep(1); setProductId(null); setDayOffset(0); setSaving(false);
