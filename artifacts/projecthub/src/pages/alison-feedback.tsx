@@ -10,11 +10,13 @@
  *  - Login gate: email + password form calls POST /api/uc/auth/login (same
  *    credentials as the UC Companion app); JWT stored in sessionStorage
  *  - 7-day stats (server-computed from the full log, not the paged slice)
+ *  - Topic breakdown: client-side keyword frequency on thumbs-down questions
+ *  - Most-flagged question card (highest repeat question in thumbs-down set)
  *  - Filter tabs: Unhelpful / Helpful / All with live counts
  *  - Expand / collapse full answer text per entry
  *  - Auto-refresh every 60 s; manual refresh button
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,12 +25,175 @@ import { Badge } from '@/components/ui/badge';
 import {
   ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
   ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
+  BarChart2, Flag,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const BASE             = import.meta.env.BASE_URL.replace(/\/$/, '');
 const TOKEN_KEY        = 'alison_admin_token';
 const AUTO_REFRESH_MS  = 60_000;
+
+// ── Keyword extraction ────────────────────────────────────────────────────────
+
+/** Common English + water-domain stop-words to exclude from frequency counts. */
+const STOP_WORDS = new Set([
+  // English function words
+  'a','an','the','and','or','but','in','on','at','to','for','of','with',
+  'by','from','as','is','it','its','was','are','were','be','been','being',
+  'have','has','had','do','does','did','will','would','could','should','may',
+  'might','shall','can','that','this','these','those','i','you','he','she',
+  'we','they','me','him','her','us','them','my','your','his','our','their',
+  'what','which','who','when','where','why','how','all','any','both','each',
+  'few','more','most','other','some','such','no','not','only','own','same',
+  'so','than','too','very','just','about','above','after','before','between',
+  'into','through','up','down','out','off','over','under','again','then',
+  'once','if','because','while','although','since','until','also','though',
+  // Common question / filler words
+  'get','got','use','used','using','make','made','need','want','like','know',
+  'think','go','going','comes','coming','put','see','work','works','working',
+  'try','trying','give','gives','help','helps','tell','told','let','keep',
+  'take','takes','still','already','even','much','many','good','long','new',
+  'please','hi','hello','thanks','thank','ok','yes','no','sure',
+  // Generic water / filter chat words that add no signal
+  'water','filter','filters','alison','ultra','clear','ucfilters',
+  'product','question','answer','issue','problem','time','day','days',
+]);
+
+/**
+ * Tokenise a question string, strip stop-words and short tokens, and return
+ * a list of meaningful lowercase words.
+ */
+function tokenise(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, ' ')   // strip punctuation (keep apostrophes, hyphens)
+    .split(/\s+/)
+    .map(w => w.replace(/^['-]+|['-]+$/g, ''))  // trim leading/trailing apostrophes/hyphens
+    .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+}
+
+/** Return a sorted array of [word, count] pairs from the given entries. */
+function extractTopKeywords(entries: FeedbackEntry[], topN = 12): [string, number][] {
+  const freq: Map<string, number> = new Map();
+  for (const e of entries) {
+    for (const w of tokenise(e.question)) {
+      freq.set(w, (freq.get(w) ?? 0) + 1);
+    }
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
+}
+
+/**
+ * Return the question that appears most often (exact match, normalised) in the
+ * down-rated set.  Returns null when all questions are unique.
+ */
+function mostFlaggedQuestion(entries: FeedbackEntry[]): { question: string; count: number } | null {
+  const freq: Map<string, number> = new Map();
+  for (const e of entries) {
+    const key = e.question.trim().toLowerCase();
+    if (key) freq.set(key, (freq.get(key) ?? 0) + 1);
+  }
+  let best: [string, number] | null = null;
+  for (const pair of freq.entries()) {
+    if (!best || pair[1] > best[1]) best = pair;
+  }
+  if (!best || best[1] < 2) return null;
+  // Return the original-cased version from the first matching entry
+  const orig = entries.find(e => e.question.trim().toLowerCase() === best![0]);
+  return { question: orig?.question ?? best[0], count: best[1] };
+}
+
+// ── TopicBreakdown component ──────────────────────────────────────────────────
+
+function TopicBreakdown({ downEntries }: { downEntries: FeedbackEntry[] }) {
+  const keywords = useMemo(() => extractTopKeywords(downEntries), [downEntries]);
+  const flagged   = useMemo(() => mostFlaggedQuestion(downEntries), [downEntries]);
+
+  if (downEntries.length === 0) return null;
+
+  const maxCount = keywords[0]?.[1] ?? 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <BarChart2 className="w-5 h-5 text-primary" />
+        <h2 className="text-lg font-semibold tracking-tight">Topic breakdown</h2>
+        <span className="text-xs text-muted-foreground ml-1">
+          — keywords from {downEntries.length} unhelpful {downEntries.length === 1 ? 'question' : 'questions'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Keyword frequency bar chart */}
+        <Card className="shadow-sm">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Most common words in thumbs-down questions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5 pb-4">
+            {keywords.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Not enough text to extract keywords yet.
+              </p>
+            ) : (
+              keywords.map(([word, count]) => (
+                <div key={word} className="flex items-center gap-3">
+                  <span className="w-24 text-xs font-mono text-foreground truncate flex-shrink-0">
+                    {word}
+                  </span>
+                  <div className="flex-1 h-5 bg-muted rounded-sm overflow-hidden">
+                    <div
+                      className="h-full bg-destructive/70 rounded-sm transition-all duration-300"
+                      style={{ width: `${Math.round((count / maxCount) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground w-6 text-right flex-shrink-0">
+                    {count}
+                  </span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Most-flagged question */}
+        <Card className={flagged ? 'shadow-sm border-destructive/30 bg-destructive/5' : 'shadow-sm border-dashed'}>
+          <CardHeader className="pb-3 flex flex-row items-center gap-2 space-y-0">
+            <Flag className="w-4 h-4 text-destructive flex-shrink-0" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Most-repeated unhelpful question
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pb-4">
+            {flagged ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground leading-snug">
+                  "{flagged.question}"
+                </p>
+                <Badge variant="destructive" className="text-xs">
+                  Asked {flagged.count}× and rated unhelpful
+                </Badge>
+                <p className="text-xs text-muted-foreground">
+                  Prioritise improving Alison's answer to this question.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-6 text-muted-foreground gap-2">
+                <Flag className="w-6 h-6 opacity-25" />
+                <p className="text-xs text-center">
+                  No question has been rated unhelpful more than once yet.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -282,14 +447,15 @@ export default function AlisonFeedbackPage() {
   if (!token) return <LoginGate onToken={handleToken} />;
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const all = data?.items ?? [];
-  const ws  = data?.weekStats ?? { total: 0, up: 0, down: 0 };
-  const pct = ws.total > 0 ? Math.round((ws.up / ws.total) * 100) : null;
+  const all        = data?.items ?? [];
+  const ws         = data?.weekStats ?? { total: 0, up: 0, down: 0 };
+  const pct        = ws.total > 0 ? Math.round((ws.up / ws.total) * 100) : null;
+  const downEntries = all.filter(e => e.rating === 'down');
 
   const shown = filter === 'all' ? all : all.filter(e => e.rating === filter);
 
   const tabCounts = {
-    down: all.filter(e => e.rating === 'down').length,
+    down: downEntries.length,
     up:   all.filter(e => e.rating === 'up').length,
     all:  all.length,
   };
@@ -373,6 +539,11 @@ export default function AlisonFeedbackPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Topic breakdown — only shown when there is at least one down-rated entry */}
+      {!loading && downEntries.length > 0 && (
+        <TopicBreakdown downEntries={downEntries} />
       )}
 
       {/* Filter tabs + list */}
