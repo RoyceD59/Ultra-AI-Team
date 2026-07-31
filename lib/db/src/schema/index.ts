@@ -32,3 +32,4 @@ export * from "./uc-water-tests";
 export * from "./uc-reviews";
 export * from "./uc-product-media";
 export * from "./uc-ai-feedback";
+export * from "./uc-offline-clients";

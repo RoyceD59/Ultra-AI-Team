@@ -1,0 +1,188 @@
+/**
+ * UC Offline Clients
+ *
+ * CRUD for manually logged sales that never went through the app.
+ * These entries feed into GET /api/uc/impact automatically.
+ *
+ * All routes require admin authentication (Bearer token).
+ *
+ * GET    /api/uc/offline-clients        — list all entries (newest first)
+ * POST   /api/uc/offline-clients        — create a new entry
+ * PUT    /api/uc/offline-clients/:id    — update an entry
+ * DELETE /api/uc/offline-clients/:id   — remove an entry
+ */
+import { Router, type Request, type Response, type IRouter } from "express";
+import { db, ucOfflineClientsTable, type OfflineProduct } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
+import { requireAdmin } from "../lib/adminAuth.js";
+
+const router: IRouter = Router();
+
+// ─── Validation helpers ───────────────────────────────────────────────────────
+
+function parseProducts(raw: unknown): OfflineProduct[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+
+  const out: OfflineProduct[] = [];
+  for (const p of raw) {
+    if (typeof p !== "object" || p === null) return null;
+    const item = p as Record<string, unknown>;
+
+    // productName — required string
+    if (typeof item["productName"] !== "string" || !item["productName"].trim()) return null;
+
+    // quantity — required finite positive integer
+    const qty = item["quantity"];
+    if (typeof qty !== "number" || !isFinite(qty) || qty < 1 || !Number.isInteger(qty)) return null;
+
+    // productId — optional finite non-negative integer
+    if (item["productId"] !== undefined && item["productId"] !== null) {
+      const pid = item["productId"];
+      if (typeof pid !== "number" || !isFinite(pid) || pid < 0 || !Number.isInteger(pid)) return null;
+    }
+
+    // litresPerUnit — optional finite non-negative number
+    if (item["litresPerUnit"] !== undefined && item["litresPerUnit"] !== null) {
+      const lpu = item["litresPerUnit"];
+      if (typeof lpu !== "number" || !isFinite(lpu) || lpu < 0) return null;
+    }
+
+    out.push({
+      productName:   (item["productName"] as string).trim(),
+      quantity:      qty as number,
+      ...(item["productId"]    !== undefined && item["productId"]    !== null ? { productId:    item["productId"]    as number } : {}),
+      ...(item["litresPerUnit"] !== undefined && item["litresPerUnit"] !== null ? { litresPerUnit: item["litresPerUnit"] as number } : {}),
+    });
+  }
+  return out;
+}
+
+function validateDate(d: unknown): string | null {
+  if (typeof d !== "string") return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  return d;
+}
+
+function parseId(raw: string | string[] | undefined): number | null {
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  const n = parseInt(s ?? "", 10);
+  return isNaN(n) ? null : n;
+}
+
+// ─── GET /api/uc/offline-clients ─────────────────────────────────────────────
+
+router.get("/uc/offline-clients", async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireAdmin(req, res))) return;
+  try {
+    const rows = await db
+      .select()
+      .from(ucOfflineClientsTable)
+      .orderBy(desc(ucOfflineClientsTable.createdAt));
+    res.json({ clients: rows });
+  } catch (err) {
+    console.error("[uc/offline-clients] list error:", err);
+    res.status(500).json({ error: "Failed to fetch offline clients" });
+  }
+});
+
+// ─── POST /api/uc/offline-clients ────────────────────────────────────────────
+
+router.post("/uc/offline-clients", async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireAdmin(req, res))) return;
+
+  const { clientRef, products, saleDate, notes } = req.body as Record<string, unknown>;
+
+  const parsedProducts = parseProducts(products);
+  const parsedDate     = validateDate(saleDate);
+
+  if (!parsedProducts) {
+    res.status(400).json({ error: "products must be a non-empty array; each entry needs a non-empty productName, a positive integer quantity, and optional finite non-negative productId / litresPerUnit" });
+    return;
+  }
+  if (!parsedDate) {
+    res.status(400).json({ error: "saleDate must be a valid YYYY-MM-DD string" });
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .insert(ucOfflineClientsTable)
+      .values({
+        clientRef: typeof clientRef === "string" ? clientRef.trim() : "",
+        products:  parsedProducts,
+        saleDate:  parsedDate,
+        notes:     typeof notes === "string" ? notes.trim() : "",
+      })
+      .returning();
+    res.status(201).json({ client: row });
+  } catch (err) {
+    console.error("[uc/offline-clients] create error:", err);
+    res.status(500).json({ error: "Failed to create offline client entry" });
+  }
+});
+
+// ─── PUT /api/uc/offline-clients/:id ─────────────────────────────────────────
+
+router.put("/uc/offline-clients/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireAdmin(req, res))) return;
+
+  const id = parseId(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const { clientRef, products, saleDate, notes } = req.body as Record<string, unknown>;
+
+  const parsedProducts = parseProducts(products);
+  const parsedDate     = validateDate(saleDate);
+
+  if (!parsedProducts) {
+    res.status(400).json({ error: "products must be a non-empty array; each entry needs a non-empty productName, a positive integer quantity, and optional finite non-negative productId / litresPerUnit" });
+    return;
+  }
+  if (!parsedDate) {
+    res.status(400).json({ error: "saleDate must be a valid YYYY-MM-DD string" });
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .update(ucOfflineClientsTable)
+      .set({
+        clientRef: typeof clientRef === "string" ? clientRef.trim() : "",
+        products:  parsedProducts,
+        saleDate:  parsedDate,
+        notes:     typeof notes === "string" ? notes.trim() : "",
+      })
+      .where(eq(ucOfflineClientsTable.id, id))
+      .returning();
+
+    if (!row) { res.status(404).json({ error: "Entry not found" }); return; }
+    res.json({ client: row });
+  } catch (err) {
+    console.error("[uc/offline-clients] update error:", err);
+    res.status(500).json({ error: "Failed to update offline client entry" });
+  }
+});
+
+// ─── DELETE /api/uc/offline-clients/:id ──────────────────────────────────────
+
+router.delete("/uc/offline-clients/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireAdmin(req, res))) return;
+
+  const id = parseId(req.params["id"]);
+  if (id === null) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  try {
+    const [row] = await db
+      .delete(ucOfflineClientsTable)
+      .where(eq(ucOfflineClientsTable.id, id))
+      .returning({ id: ucOfflineClientsTable.id });
+
+    if (!row) { res.status(404).json({ error: "Entry not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[uc/offline-clients] delete error:", err);
+    res.status(500).json({ error: "Failed to delete offline client entry" });
+  }
+});
+
+export default router;

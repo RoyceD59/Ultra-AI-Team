@@ -1,17 +1,21 @@
 /**
  * UC Impact Metrics
  *
- * GET  /api/uc/impact         — live stats (auto + admin offset)
- * POST /api/uc/impact/override — admin: set offset adjustments
+ * GET  /api/uc/impact          — live stats (auto + offline-clients + legacy offset)
+ * POST /api/uc/impact/override — admin: set legacy offset adjustments
  *
  * Calculations
  *   litresFiltered = Σ (order_item.quantity × PRODUCT_LITRES[productId])
- *                   for completed / processing orders, excluding CAT_SHOWER products
+ *                   for completed / processing / on-hold orders
+ *                 + Σ (offline_client.product.quantity × capacity)  ← NEW
+ *                 + legacyLitresOffset
  *   plasticsAvoided = litresFiltered × 2   (500 ml bottle = 0.5 L → 1 L = 2 bottles)
- *   totalUsers      = COUNT(DISTINCT userId) from those same orders
+ *   totalUsers      = COUNT(DISTINCT userId) from app orders
+ *                   + COUNT(offline client entries)                  ← NEW
+ *                   + legacyUsersOffset
  *
- * Admin offset is additive on top of the auto-calculated value, stored in
- * artifacts/api-server/data/impact-override.json for persistence across requests.
+ * The legacy offset (impact-override.json) is kept for historical data that
+ * was entered before the per-client register existed.
  */
 import { Router, type Request, type Response, type IRouter } from "express";
 import { promises as fs } from "node:fs";
@@ -20,8 +24,11 @@ import {
   db,
   ucOrdersTable,
   ucOrderItemsTable,
+  ucOfflineClientsTable,
+  type OfflineProduct,
 } from "@workspace/db";
-import { eq, inArray, not } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
+import { requireAdmin } from "../lib/adminAuth.js";
 
 const router: IRouter = Router();
 
@@ -29,7 +36,7 @@ const router: IRouter = Router();
 // Excludes CAT_SHOWER (ids 15,16,17,18,19) and shower/skin accessories (24,25).
 // 0 = non-filtering product (carry sleeve, filter shell, gift bundle with no filter).
 
-const PRODUCT_LITRES: Record<number, number> = {
+export const PRODUCT_LITRES: Record<number, number> = {
   1:  150,   // Hydra Flux bottle
   2:  150,   // Truva Go bottle
   3:  150,   // Viva Drop bottle
@@ -55,7 +62,7 @@ const PRODUCT_LITRES: Record<number, number> = {
 // Statuses that count as "fulfilled" for impact purposes
 const FULFILLED_STATUSES = ["completed", "processing", "on-hold"];
 
-// ─── Override file ─────────────────────────────────────────────────────────────
+// ─── Legacy override file ──────────────────────────────────────────────────────
 const OVERRIDE_FILE = path.resolve("artifacts/api-server/data/impact-override.json");
 
 interface ImpactOverride {
@@ -90,10 +97,9 @@ async function writeOverride(o: ImpactOverride): Promise<void> {
   await fs.writeFile(OVERRIDE_FILE, JSON.stringify(o, null, 2), "utf8");
 }
 
-// ─── Auto-calculate from DB ───────────────────────────────────────────────────
+// ─── Auto-calculate from app DB orders ───────────────────────────────────────
 
 async function calcImpactFromDb(): Promise<{ totalUsers: number; litresFiltered: number }> {
-  // Get all fulfilled order ids + distinct user ids
   const orders = await db
     .select({ id: ucOrdersTable.id, userId: ucOrdersTable.userId })
     .from(ucOrdersTable)
@@ -101,11 +107,10 @@ async function calcImpactFromDb(): Promise<{ totalUsers: number; litresFiltered:
 
   if (orders.length === 0) return { totalUsers: 0, litresFiltered: 0 };
 
-  const orderIds  = orders.map(o => o.id);
-  const userIds   = new Set(orders.map(o => o.userId));
+  const orderIds   = orders.map(o => o.id);
+  const userIds    = new Set(orders.map(o => o.userId));
   const totalUsers = userIds.size;
 
-  // Sum litres from line items
   const items = await db
     .select({
       productId: ucOrderItemsTable.productId,
@@ -123,18 +128,49 @@ async function calcImpactFromDb(): Promise<{ totalUsers: number; litresFiltered:
   return { totalUsers, litresFiltered };
 }
 
+// ─── Calculate from offline client entries ────────────────────────────────────
+
+async function calcImpactFromOfflineClients(): Promise<{
+  clientCount: number;
+  litresFiltered: number;
+}> {
+  const rows = await db.select().from(ucOfflineClientsTable);
+  if (rows.length === 0) return { clientCount: 0, litresFiltered: 0 };
+
+  let litresFiltered = 0;
+  for (const row of rows) {
+    const products = (row.products ?? []) as OfflineProduct[];
+    for (const p of products) {
+      const capacity =
+        p.litresPerUnit ??
+        (p.productId !== undefined ? (PRODUCT_LITRES[p.productId] ?? 0) : 0);
+      litresFiltered += capacity * p.quantity;
+    }
+  }
+
+  return { clientCount: rows.length, litresFiltered };
+}
+
 // ─── GET /api/uc/impact ───────────────────────────────────────────────────────
 
 router.get("/uc/impact", async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [{ totalUsers: dbUsers, litresFiltered: dbLitres }, override] = await Promise.all([
+    const [
+      { totalUsers: dbUsers, litresFiltered: dbLitres },
+      { clientCount: offlineCount, litresFiltered: offlineLitres },
+      override,
+    ] = await Promise.all([
       calcImpactFromDb(),
+      calcImpactFromOfflineClients(),
       readOverride(),
     ]);
 
-    const totalUsers      = dbUsers      + (override.usersOffset  ?? 0);
-    const litresFiltered  = dbLitres     + (override.litresOffset ?? 0);
-    const plasticsAvoided = litresFiltered * 2; // 1 L = 2 × 500 ml bottles
+    const legacyLitresOffset = override.litresOffset ?? 0;
+    const legacyUsersOffset  = override.usersOffset  ?? 0;
+
+    const totalUsers      = dbUsers      + offlineCount    + legacyUsersOffset;
+    const litresFiltered  = dbLitres     + offlineLitres   + legacyLitresOffset;
+    const plasticsAvoided = litresFiltered * 2;
 
     res.json({
       totalUsers:      Math.max(0, totalUsers),
@@ -144,9 +180,13 @@ router.get("/uc/impact", async (_req: Request, res: Response): Promise<void> => 
         totalUsers:     dbUsers,
         litresFiltered: dbLitres,
       },
+      offlineStats: {
+        clientCount:    offlineCount,
+        litresFiltered: offlineLitres,
+      },
       override: {
-        litresOffset:  override.litresOffset,
-        usersOffset:   override.usersOffset,
+        litresOffset:  legacyLitresOffset,
+        usersOffset:   legacyUsersOffset,
         lastUpdatedBy: override.lastUpdatedBy,
         lastUpdatedAt: override.lastUpdatedAt,
       },
@@ -161,6 +201,7 @@ router.get("/uc/impact", async (_req: Request, res: Response): Promise<void> => 
 // ─── POST /api/uc/impact/override ─────────────────────────────────────────────
 
 router.post("/uc/impact/override", async (req: Request, res: Response): Promise<void> => {
+  if (!(await requireAdmin(req, res))) return;
   const { litresOffset, usersOffset, updatedBy } = req.body as {
     litresOffset?: unknown;
     usersOffset?:  unknown;
