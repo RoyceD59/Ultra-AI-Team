@@ -10,7 +10,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, Platform, Alert, ActivityIndicator,
+  TouchableOpacity, Platform, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -65,6 +65,7 @@ export default function NewTicketScreen() {
   const [submitted,    setSubmitted]    = useState(false);
   const [ticketRef,    setTicketRef]    = useState('');
   const [whatsAppSummary, setWhatsAppSummary] = useState('');
+  const [error,        setError]        = useState('');
 
   function toggleProduct(model: string) {
     setSelectedProducts(prev =>
@@ -75,23 +76,21 @@ export default function NewTicketScreen() {
   async function submit() {
     const productModel = selectedProducts.length > 0
       ? selectedProducts.join(' / ')
-      : 'Other';
+      : '';
 
     if (selectedProducts.length === 0) {
-      Alert.alert('Select a product', 'Please select at least one product or choose "Other".');
+      setError('Please select at least one product — or tap "Other" if your product isn\'t listed.');
       return;
     }
     if (!issue.trim()) {
-      Alert.alert('Describe the issue', 'Please describe what is happening so our team can help.');
+      setError('Please describe the issue so our team can help you.');
       return;
     }
     if (media.length > 0 && !token) {
-      Alert.alert(
-        'Sign in to attach media',
-        'Photos and videos can only be uploaded from an account. Sign in, or remove the attachments to continue.',
-      );
+      setError('Sign in to attach photos or videos, or remove the attachments and continue as a guest.');
       return;
     }
+    setError('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
@@ -114,7 +113,7 @@ export default function NewTicketScreen() {
       setWhatsAppSummary(summary);
       setSubmitted(true);
     } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to submit ticket. Please try again.');
+      setError(e instanceof Error ? e.message : 'Failed to submit ticket. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -258,6 +257,14 @@ export default function NewTicketScreen() {
         </Text>
       </View>
 
+      {/* Inline error */}
+      {!!error && (
+        <View style={[styles.errorBox, { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' }]}>
+          <Ionicons name="alert-circle-outline" size={16} color="#DC2626" />
+          <Text style={[styles.errorText, { color: '#DC2626' }]}>{error}</Text>
+        </View>
+      )}
+
       {/* Submit */}
       <TouchableOpacity onPress={submit} disabled={submitting}
         style={[styles.submitBtn, { backgroundColor: submitting ? colors.muted : colors.primary }]}>
@@ -286,6 +293,8 @@ const styles = StyleSheet.create({
   hint:             { fontSize: 12, lineHeight: 18 },
   submitBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText:    { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  errorBox:         { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12 },
+  errorText:        { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' as const },
   successIcon:      { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
   successTitle:     { fontSize: 22, fontWeight: '700' as const },
   successDesc:      { fontSize: 14, lineHeight: 21, textAlign: 'center' },

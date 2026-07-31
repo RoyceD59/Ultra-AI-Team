@@ -246,7 +246,7 @@ router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<vo
   } catch (err) {
     console.error("[uc/ai/water-chat] AI error:", err);
     res.status(502).json({
-      error: "Alison is temporarily unavailable. Please try again shortly or contact support at +254 700 000 000.",
+      error: "Alison is temporarily unavailable. Please try again shortly or contact support at 0717774049.",
     });
   }
 });

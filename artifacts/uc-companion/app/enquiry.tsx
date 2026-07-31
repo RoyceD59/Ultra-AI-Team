@@ -152,7 +152,7 @@ export default function EnquiryScreen() {
           </View>
           <View style={styles.altRow}>
             <Ionicons name="logo-whatsapp" size={15} color="#25D366" />
-            <Text style={[styles.altText, { color: colors.mutedForeground }]}>+254 700 000 000</Text>
+            <Text style={[styles.altText, { color: colors.mutedForeground }]}>0717774049</Text>
           </View>
         </View>
       </ScrollView>

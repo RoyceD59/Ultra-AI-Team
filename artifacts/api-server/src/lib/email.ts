@@ -186,7 +186,7 @@ export function buildTicketConfirmationEmail(params: {
             <tr><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px;">Product</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;font-size:13px;">${productModel}</td></tr>
             <tr><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px;vertical-align:top;">Issue</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;font-size:13px;">${issueDescription}</td></tr>
           </table>
-          <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">For urgent help call <a href="tel:+254700000000" style="color:#0D4FA8;">+254 700 000 000</a> or email <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>.</p>
+          <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">For urgent help call <a href="tel:+254717774049" style="color:#0D4FA8;">0717774049</a> or email <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>.</p>
         </td></tr>
         <tr><td style="background:#f3f4f6;padding:20px 32px;text-align:center;"><p style="margin:0;color:#9ca3af;font-size:12px;">© 2026 UCFilters Ltd · Nairobi, Kenya · <a href="https://ucfilters.co.ke" style="color:#6b7280;">ucfilters.co.ke</a></p></td></tr>
       </table>
@@ -203,7 +203,7 @@ export function buildTicketConfirmationEmail(params: {
     `Issue: ${issueDescription}`,
     "",
     "Our team will contact you within 24–48 hours.",
-    "Urgent? Call +254 700 000 000 or email support@ucfilters.co.ke",
+    "Urgent? Call 0717774049 or email support@ucfilters.co.ke",
   ].join("\n");
   return { subject: `Your Ultra Clear maintenance ticket ${ticketId} is submitted`, html, text };
 }
@@ -238,7 +238,7 @@ export function buildWaterTestConfirmationEmail(params: {
             <tr><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px;">Water source</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;font-size:13px;">${waterSource}</td></tr>
             ${concerns ? `<tr><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:13px;vertical-align:top;">Concerns</td><td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#111827;font-size:13px;">${concerns}</td></tr>` : ""}
           </table>
-          <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">Questions? Call <a href="tel:+254700000000" style="color:#0D4FA8;">+254 700 000 000</a> or email <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>.</p>
+          <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">Questions? Call <a href="tel:+254717774049" style="color:#0D4FA8;">0717774049</a> or email <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>.</p>
         </td></tr>
         <tr><td style="background:#f3f4f6;padding:20px 32px;text-align:center;"><p style="margin:0;color:#9ca3af;font-size:12px;">© 2026 UCFilters Ltd · Nairobi, Kenya · <a href="https://ucfilters.co.ke" style="color:#6b7280;">ucfilters.co.ke</a></p></td></tr>
       </table>
@@ -256,7 +256,7 @@ export function buildWaterTestConfirmationEmail(params: {
     ...(concerns ? [`Concerns: ${concerns}`] : []),
     "",
     "We'll call you to confirm the appointment time.",
-    "Questions? Call +254 700 000 000 or email support@ucfilters.co.ke",
+    "Questions? Call 0717774049 or email support@ucfilters.co.ke",
   ].join("\n");
   return { subject: `Your Ultra Clear water test booking ${testId} is confirmed`, html, text };
 }
@@ -392,7 +392,7 @@ export function buildOrderReceiptEmail(params: {
             <p style="margin:0 0 24px;color:#6b7280;font-size:13px;line-height:1.6;">
               Questions about your order? Contact us at
               <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>
-              or call <a href="tel:+254700000000" style="color:#0D4FA8;">+254 700 000 000</a>.
+              or call <a href="tel:+254717774049" style="color:#0D4FA8;">0717774049</a>.
             </p>
           </td>
         </tr>
@@ -427,7 +427,7 @@ export function buildOrderReceiptEmail(params: {
       : []),
     `  Total: ${fmt(total)}`,
     "",
-    "Questions? Email support@ucfilters.co.ke or call +254 700 000 000.",
+    "Questions? Email support@ucfilters.co.ke or call 0717774049.",
     "ucfilters.co.ke",
   ].join("\n");
 

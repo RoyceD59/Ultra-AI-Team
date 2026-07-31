@@ -229,7 +229,7 @@ export default function AiChatScreen() {
       setMessages(prev => [...prev, {
         id:       `err-${Date.now()}`,
         role:     'assistant',
-        content:  "I'm having a little trouble connecting right now. Please try again in a moment, or reach UCFilters support at +254 700 000 000.",
+        content:  "I'm having a little trouble connecting right now. Please try again in a moment, or reach UCFilters support at 0717774049.",
         noRating: true,
       }]);
     } finally {

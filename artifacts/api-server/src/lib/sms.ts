@@ -101,7 +101,7 @@ export function ticketConfirmationSms(params: {
   return (
     `Hi ${params.firstName}! Your Ultra Clear maintenance ticket ${params.ticketId} has been submitted. ` +
     `Our team will contact you within 24–48 hours. ` +
-    `For urgent help call +254 700 000 000.`
+    `For urgent help call 0717774049.`
   );
 }
 
@@ -116,6 +116,6 @@ export function waterTestConfirmationSms(params: {
   return (
     `Hi ${params.firstName}! Your free Ultra Clear water quality test (ref: ${params.testId}) ` +
     `is booked for ${shortAddr}. ` +
-    `We'll call to confirm the appointment time. Questions? Call +254 700 000 000.`
+    `We'll call to confirm the appointment time. Questions? Call 0717774049.`
   );
 }

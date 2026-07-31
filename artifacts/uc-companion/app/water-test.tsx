@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, Platform, Alert, ActivityIndicator,
+  TouchableOpacity, Platform, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -47,6 +47,7 @@ export default function WaterTestScreen() {
   const [submitted,        setSubmitted]        = useState(false);
   const [receiptRef,       setReceiptRef]       = useState('');
   const [whatsAppSummary,  setWhatsAppSummary]  = useState('');
+  const [error,            setError]            = useState('');
 
   const toggleConcern = (c: string) => {
     setSelectedConcerns(prev =>
@@ -55,17 +56,15 @@ export default function WaterTestScreen() {
   };
 
   async function submit() {
-    if (!name || !address || !phone || !waterSource) {
-      Alert.alert('Required fields', 'Please fill in name, address, phone, and water source.');
+    if (!name.trim() || !address.trim() || !phone.trim() || !waterSource) {
+      setError('Please fill in your name, address, phone number, and select a water source.');
       return;
     }
     if (media.length > 0 && !token) {
-      Alert.alert(
-        'Sign in to attach media',
-        'Photos and videos can only be uploaded from an account. Sign in, or remove the attachments to continue.',
-      );
+      setError('Sign in to attach photos or videos, or remove the attachments and continue as a guest.');
       return;
     }
+    setError('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     try {
@@ -90,7 +89,7 @@ export default function WaterTestScreen() {
       setWhatsAppSummary(summary);
       setSubmitted(true);
     } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Submission failed. Please try again.');
+      setError(e instanceof Error ? e.message : 'Submission failed. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -224,6 +223,14 @@ export default function WaterTestScreen() {
         </Text>
       </View>
 
+      {/* Inline error */}
+      {!!error && (
+        <View style={[styles.errorBox, { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' }]}>
+          <Ionicons name="alert-circle-outline" size={16} color="#DC2626" />
+          <Text style={[styles.errorText, { color: '#DC2626' }]}>{error}</Text>
+        </View>
+      )}
+
       <TouchableOpacity onPress={submit} disabled={submitting}
         style={[styles.submitBtn, { backgroundColor: submitting ? colors.muted : colors.primary }]}>
         {submitting ? <ActivityIndicator color="#fff" size="small" /> : (
@@ -253,6 +260,8 @@ const styles = StyleSheet.create({
   hint:         { fontSize: 12, lineHeight: 18 },
   submitBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 14, paddingVertical: 16 },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' as const },
+  errorBox:     { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12 },
+  errorText:    { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500' as const },
   successIcon:  { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center' },
   successTitle: { fontSize: 24, fontWeight: '700' as const },
   successDesc:  { fontSize: 15, lineHeight: 24, textAlign: 'center' },

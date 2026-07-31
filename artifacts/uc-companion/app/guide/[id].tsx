@@ -1,21 +1,22 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Platform, LayoutAnimation, UIManager,
+  Platform, LayoutAnimation, UIManager, TextInput, Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { GUIDES, GuideSection } from '@/data/guides';
 
-// Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
 const topPad = Platform.OS === 'web' ? 67 : 0;
+const SUPPORT_PHONE = '0717774049';
+const SUPPORT_TEL   = 'tel:+254717774049';
 
-// ── Derive a sensible illustration icon from the section heading ──────────────
+// ── Icon map ──────────────────────────────────────────────────────────────────
 const HEADING_ICON_MAP: Array<[RegExp, string]> = [
   [/box|unbox|in the box|package|what.s include/i, 'cube-outline'],
   [/tool|equipment|require|need/i,                  'construct-outline'],
@@ -45,45 +46,37 @@ function iconForHeading(heading: string, fallback: string): string {
   return fallback;
 }
 
-// ── Illustration banner ───────────────────────────────────────────────────────
-interface IllustrationProps {
-  icon: string;
-  accentColor: string;
-  stepCount?: number;
-}
-
-function IllustrationBanner({ icon, accentColor, stepCount }: IllustrationProps) {
+// ── Compact inline illustration strip ────────────────────────────────────────
+function IllustrationStrip({
+  icon, accentColor, stepCount,
+}: { icon: string; accentColor: string; stepCount?: number }) {
   return (
-    <View style={[styles.illustration, { backgroundColor: accentColor + '12', borderColor: accentColor + '30' }]}>
-      {/* Decorative circles */}
-      <View style={[styles.illCircle1, { backgroundColor: accentColor + '18' }]} />
-      <View style={[styles.illCircle2, { backgroundColor: accentColor + '10' }]} />
-
-      {/* Main icon */}
-      <View style={[styles.illIconWrap, { backgroundColor: accentColor + '22', borderColor: accentColor + '40' }]}>
-        <Ionicons name={icon as never} size={36} color={accentColor} />
+    <View style={[styles.illStrip, { backgroundColor: accentColor + '10', borderColor: accentColor + '28' }]}>
+      <View style={[styles.illIconWrap, { backgroundColor: accentColor + '20' }]}>
+        <Ionicons name={icon as never} size={22} color={accentColor} />
       </View>
-
-      {/* Step count badge */}
       {stepCount != null && stepCount > 0 && (
-        <View style={[styles.illBadge, { backgroundColor: accentColor }]}>
-          <Text style={styles.illBadgeText}>{stepCount} steps</Text>
+        <View style={[styles.illStepBadge, { backgroundColor: accentColor + '18' }]}>
+          <Ionicons name="footsteps-outline" size={11} color={accentColor} />
+          <Text style={[styles.illStepText, { color: accentColor }]}>{stepCount} steps</Text>
         </View>
       )}
+      {/* decorative dots */}
+      <View style={{ flex: 1 }} />
+      {[0,1,2,3].map(i => (
+        <View key={i} style={[styles.illDot, { backgroundColor: accentColor + (i % 2 === 0 ? '30' : '18') }]} />
+      ))}
     </View>
   );
 }
 
 // ── Collapsible section card ──────────────────────────────────────────────────
-interface SectionCardProps {
-  section: GuideSection;
-  index: number;
-  guideIcon: string;
-  accentColor: string;
-  defaultOpen: boolean;
-}
-
-function SectionCard({ section, index, guideIcon, accentColor, defaultOpen }: SectionCardProps) {
+function SectionCard({
+  section, index, guideIcon, accentColor, defaultOpen,
+}: {
+  section: GuideSection; index: number; guideIcon: string;
+  accentColor: string; defaultOpen: boolean;
+}) {
   const colors = useColors();
   const [open, setOpen] = useState(defaultOpen);
 
@@ -92,46 +85,28 @@ function SectionCard({ section, index, guideIcon, accentColor, defaultOpen }: Se
     setOpen(o => !o);
   }, []);
 
-  const illIcon = section.illustrationIcon ?? iconForHeading(section.heading, guideIcon);
+  const illIcon   = section.illustrationIcon ?? iconForHeading(section.heading, guideIcon);
   const hasContent = section.body || (section.steps && section.steps.length > 0)
     || section.tip || section.warning;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      {/* Header row — always visible */}
-      <TouchableOpacity
-        onPress={toggle}
-        activeOpacity={0.7}
-        style={styles.cardHeader}
-      >
-        {/* Section number */}
+      <TouchableOpacity onPress={toggle} activeOpacity={0.7} style={styles.cardHeader}>
         <View style={[styles.sectionNum, { backgroundColor: accentColor + '18' }]}>
           <Text style={[styles.sectionNumText, { color: accentColor }]}>{index + 1}</Text>
         </View>
-
-        {/* Heading + chevron */}
         <Text style={[styles.cardHeading, { color: colors.text }]} numberOfLines={open ? undefined : 2}>
           {section.heading}
         </Text>
-
         {hasContent && (
-          <Ionicons
-            name={open ? 'chevron-up' : 'chevron-down'}
-            size={18}
-            color={colors.mutedForeground}
-          />
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
         )}
       </TouchableOpacity>
 
-      {/* Expandable body */}
       {open && hasContent && (
         <View style={styles.cardBody}>
-          {/* Illustration banner */}
-          <IllustrationBanner
-            icon={illIcon}
-            accentColor={accentColor}
-            stepCount={section.steps?.length}
-          />
+          {/* Compact illustration strip */}
+          <IllustrationStrip icon={illIcon} accentColor={accentColor} stepCount={section.steps?.length} />
 
           {section.body ? (
             <Text style={[styles.body, { color: colors.mutedForeground }]}>{section.body}</Text>
@@ -140,7 +115,7 @@ function SectionCard({ section, index, guideIcon, accentColor, defaultOpen }: Se
           {section.steps ? (
             <View style={styles.steps}>
               {section.steps.map((step, i) => (
-                <View key={i} style={[styles.step, { borderColor: colors.border }]}>
+                <View key={i} style={styles.step}>
                   <View style={[styles.stepNumber, { backgroundColor: accentColor }]}>
                     <Text style={styles.stepNumberText}>{i + 1}</Text>
                   </View>
@@ -151,15 +126,15 @@ function SectionCard({ section, index, guideIcon, accentColor, defaultOpen }: Se
           ) : null}
 
           {section.tip ? (
-            <View style={[styles.callout, { backgroundColor: accentColor + '12', borderColor: accentColor + '40' }]}>
-              <Ionicons name="bulb-outline" size={16} color={accentColor} style={{ marginTop: 2 }} />
+            <View style={[styles.callout, { backgroundColor: accentColor + '10', borderColor: accentColor + '35' }]}>
+              <Ionicons name="bulb-outline" size={15} color={accentColor} style={{ marginTop: 1 }} />
               <Text style={[styles.calloutText, { color: colors.text }]}>{section.tip}</Text>
             </View>
           ) : null}
 
           {section.warning ? (
             <View style={[styles.callout, { backgroundColor: '#FFF3CD', borderColor: '#F59E0B' }]}>
-              <Ionicons name="warning-outline" size={16} color="#D97706" style={{ marginTop: 2 }} />
+              <Ionicons name="warning-outline" size={15} color="#D97706" style={{ marginTop: 1 }} />
               <Text style={[styles.calloutText, { color: '#92400E' }]}>{section.warning}</Text>
             </View>
           ) : null}
@@ -169,13 +144,132 @@ function SectionCard({ section, index, guideIcon, accentColor, defaultOpen }: Se
   );
 }
 
+// ── Customer satisfaction widget ──────────────────────────────────────────────
+const FOLLOW_UP_OPTIONS = [
+  'Steps were unclear',
+  'Information was incomplete',
+  'Too long / too detailed',
+  'Didn\'t apply to my product',
+  'Other',
+];
+
+type SatState = 'idle' | 'positive' | 'negative' | 'followup' | 'done';
+
+function SatisfactionWidget({ accentColor }: { accentColor: string }) {
+  const colors = useColors();
+  const [state, setState]       = useState<SatState>('idle');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [comment, setComment]   = useState('');
+
+  const toggleOption = (opt: string) =>
+    setSelected(s => s.includes(opt) ? s.filter(o => o !== opt) : [...s, opt]);
+
+  if (state === 'done') {
+    return (
+      <View style={[styles.satBox, { backgroundColor: '#F0FDF4', borderColor: '#86EFAC' }]}>
+        <Ionicons name="checkmark-circle" size={22} color="#16A34A" />
+        <Text style={[styles.satDoneText, { color: '#15803D' }]}>
+          Thank you! Your feedback helps us improve our guides.
+        </Text>
+      </View>
+    );
+  }
+
+  if (state === 'positive') {
+    return (
+      <View style={[styles.satBox, { backgroundColor: accentColor + '10', borderColor: accentColor + '35' }]}>
+        <Ionicons name="heart" size={20} color={accentColor} />
+        <Text style={[styles.satDoneText, { color: accentColor }]}>
+          Great! We're glad this guide was helpful.
+        </Text>
+      </View>
+    );
+  }
+
+  if (state === 'negative' || state === 'followup') {
+    return (
+      <View style={[styles.satFollowUp, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.satFollowTitle, { color: colors.text }]}>
+          What could be better?
+        </Text>
+        <Text style={[styles.satFollowSub, { color: colors.mutedForeground }]}>
+          Select all that apply
+        </Text>
+        <View style={styles.satChips}>
+          {FOLLOW_UP_OPTIONS.map(opt => {
+            const active = selected.includes(opt);
+            return (
+              <TouchableOpacity
+                key={opt}
+                onPress={() => toggleOption(opt)}
+                activeOpacity={0.7}
+                style={[
+                  styles.chip,
+                  active
+                    ? { backgroundColor: accentColor, borderColor: accentColor }
+                    : { backgroundColor: colors.background, borderColor: colors.border },
+                ]}
+              >
+                <Text style={[styles.chipText, { color: active ? '#fff' : colors.text }]}>
+                  {opt}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <TextInput
+          value={comment}
+          onChangeText={setComment}
+          placeholder="Any other details? (optional)"
+          placeholderTextColor={colors.mutedForeground}
+          multiline
+          style={[styles.satInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+        />
+        <TouchableOpacity
+          onPress={() => setState('done')}
+          style={[styles.satSubmit, { backgroundColor: accentColor }]}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.satSubmitText}>Send feedback</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // idle — show the initial question
+  return (
+    <View style={[styles.satBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Text style={[styles.satQuestion, { color: colors.text }]}>
+        Was this guide helpful?
+      </Text>
+      <View style={styles.satButtons}>
+        <TouchableOpacity
+          onPress={() => setState('positive')}
+          style={[styles.satBtn, { borderColor: '#16A34A', backgroundColor: '#F0FDF4' }]}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="thumbs-up-outline" size={18} color="#16A34A" />
+          <Text style={[styles.satBtnText, { color: '#16A34A' }]}>Yes, helpful</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setState('negative')}
+          style={[styles.satBtn, { borderColor: '#DC2626', backgroundColor: '#FFF1F2' }]}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="thumbs-down-outline" size={18} color="#DC2626" />
+          <Text style={[styles.satBtnText, { color: '#DC2626' }]}>Not really</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function GuideDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id }  = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
   const colors  = useColors();
-
-  const guide = GUIDES.find(g => g.id === id);
+  const guide   = GUIDES.find(g => g.id === id);
 
   if (!guide) {
     return (
@@ -220,23 +314,25 @@ export default function GuideDetailScreen() {
       >
         {/* Hero */}
         <View style={[styles.hero, { backgroundColor: colors.primaryLight }]}>
-          <View style={[styles.heroIcon, { backgroundColor: colors.primary }]}>
-            <Ionicons name={guide.icon as never} size={28} color="#fff" />
+          <View style={styles.heroRow}>
+            <View style={[styles.heroIcon, { backgroundColor: colors.primary }]}>
+              <Ionicons name={guide.icon as never} size={24} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.heroTitle, { color: colors.text }]}>{guide.title}</Text>
+              <Text style={[styles.heroProducts, { color: colors.mutedForeground }]}>{guide.products}</Text>
+            </View>
           </View>
-          <Text style={[styles.heroTitle, { color: colors.text }]}>{guide.title}</Text>
-          <Text style={[styles.heroProducts, { color: colors.mutedForeground }]}>{guide.products}</Text>
           <Text style={[styles.heroSummary, { color: colors.text }]}>{guide.summary}</Text>
-
-          {/* Section count pill */}
           <View style={[styles.sectionCountPill, { backgroundColor: colors.primary + '20' }]}>
-            <Ionicons name="list-outline" size={13} color={colors.primary} />
+            <Ionicons name="list-outline" size={12} color={colors.primary} />
             <Text style={[styles.sectionCountText, { color: colors.primary }]}>
               {guide.sections.length} sections · tap to expand
             </Text>
           </View>
         </View>
 
-        {/* Collapsible section cards */}
+        {/* Collapsible sections */}
         {guide.sections.map((section, si) => (
           <SectionCard
             key={si}
@@ -248,14 +344,19 @@ export default function GuideDetailScreen() {
           />
         ))}
 
+        {/* Satisfaction widget */}
+        <SatisfactionWidget accentColor={accent} />
+
         {/* Footer CTA */}
         <View style={[styles.footer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Ionicons name="headset-outline" size={22} color={colors.primary} />
+          <Ionicons name="headset-outline" size={20} color={colors.primary} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.footerTitle, { color: colors.text }]}>Still need help?</Text>
-            <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
-              Submit a ticket or call +254 700 000 000
-            </Text>
+            <TouchableOpacity onPress={() => Linking.openURL(SUPPORT_TEL)}>
+              <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
+                Call {SUPPORT_PHONE} or submit a ticket
+              </Text>
+            </TouchableOpacity>
           </View>
           <TouchableOpacity onPress={() => router.push('/ticket/new' as never)}
             style={[styles.footerBtn, { backgroundColor: colors.primary }]}>
@@ -281,45 +382,65 @@ const styles = StyleSheet.create({
   categoryPillText: { fontSize: 11, fontWeight: '700' as const, textTransform: 'uppercase', letterSpacing: 0.5 },
   readTime:         { fontSize: 12 },
 
-  content:          { padding: 16, gap: 12 },
+  content:          { padding: 14, gap: 8 },
 
-  hero:             { borderRadius: 16, padding: 20, gap: 10, alignItems: 'flex-start', marginBottom: 4 },
-  heroIcon:         { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  heroTitle:        { fontSize: 20, fontWeight: '700' as const, lineHeight: 28 },
-  heroProducts:     { fontSize: 12, fontWeight: '500' as const },
-  heroSummary:      { fontSize: 14, lineHeight: 22, marginTop: 4 },
-  sectionCountPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, marginTop: 6 },
-  sectionCountText: { fontSize: 12, fontWeight: '600' as const },
+  // Hero — compact side-by-side layout
+  hero:             { borderRadius: 14, padding: 14, gap: 8 },
+  heroRow:          { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  heroIcon:         { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  heroTitle:        { fontSize: 15, fontWeight: '700' as const, lineHeight: 21 },
+  heroProducts:     { fontSize: 11, fontWeight: '500' as const, marginTop: 2 },
+  heroSummary:      { fontSize: 13, lineHeight: 20 },
+  sectionCountPill: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 20 },
+  sectionCountText: { fontSize: 11, fontWeight: '600' as const },
 
-  // Card
-  card:             { borderRadius: 14, borderWidth: 1, overflow: 'hidden' },
-  cardHeader:       { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  sectionNum:       { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  sectionNumText:   { fontSize: 13, fontWeight: '700' as const },
-  cardHeading:      { flex: 1, fontSize: 15, fontWeight: '700' as const, lineHeight: 21 },
-  cardBody:         { padding: 14, paddingTop: 0, gap: 14 },
+  // Card — tighter
+  card:             { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  cardHeader:       { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
+  sectionNum:       { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  sectionNumText:   { fontSize: 12, fontWeight: '700' as const },
+  cardHeading:      { flex: 1, fontSize: 14, fontWeight: '700' as const, lineHeight: 20 },
+  cardBody:         { paddingHorizontal: 12, paddingBottom: 12, gap: 10 },
 
-  // Illustration
-  illustration:     { borderRadius: 12, borderWidth: 1, height: 110, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  illCircle1:       { position: 'absolute', width: 120, height: 120, borderRadius: 60, top: -30, right: -20 },
-  illCircle2:       { position: 'absolute', width: 80, height: 80, borderRadius: 40, bottom: -20, left: 10 },
-  illIconWrap:      { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', borderWidth: 2 },
-  illBadge:         { position: 'absolute', top: 10, right: 10, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-  illBadgeText:     { color: '#fff', fontSize: 10, fontWeight: '700' as const },
+  // Compact illustration strip
+  illStrip:         { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 9, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 7, overflow: 'hidden' },
+  illIconWrap:      { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  illStepBadge:     { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8 },
+  illStepText:      { fontSize: 11, fontWeight: '700' as const },
+  illDot:           { width: 6, height: 6, borderRadius: 3 },
 
-  body:             { fontSize: 14, lineHeight: 22 },
-  steps:            { gap: 10 },
-  step:             { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
-  stepNumber:       { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
-  stepNumberText:   { color: '#fff', fontSize: 12, fontWeight: '700' as const },
-  stepText:         { flex: 1, fontSize: 14, lineHeight: 22 },
+  body:             { fontSize: 13, lineHeight: 21 },
+  steps:            { gap: 8 },
+  step:             { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  stepNumber:       { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0 },
+  stepNumberText:   { color: '#fff', fontSize: 11, fontWeight: '700' as const },
+  stepText:         { flex: 1, fontSize: 13, lineHeight: 20 },
 
-  callout:          { flexDirection: 'row', gap: 10, borderWidth: 1, borderRadius: 10, padding: 12, alignItems: 'flex-start' },
-  calloutText:      { flex: 1, fontSize: 13, lineHeight: 20 },
+  callout:          { flexDirection: 'row', gap: 8, borderWidth: 1, borderRadius: 9, padding: 10, alignItems: 'flex-start' },
+  calloutText:      { flex: 1, fontSize: 12, lineHeight: 19 },
 
-  footer:           { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, padding: 16, marginTop: 4 },
-  footerTitle:      { fontSize: 14, fontWeight: '700' as const },
-  footerSub:        { fontSize: 12, marginTop: 2 },
-  footerBtn:        { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
-  footerBtnText:    { color: '#fff', fontSize: 13, fontWeight: '600' as const },
+  // Satisfaction widget
+  satBox:           { borderRadius: 12, borderWidth: 1, padding: 14, gap: 12, alignItems: 'center' },
+  satQuestion:      { fontSize: 14, fontWeight: '700' as const, textAlign: 'center' },
+  satButtons:       { flexDirection: 'row', gap: 10, width: '100%' },
+  satBtn:           { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderRadius: 10, paddingVertical: 9 },
+  satBtnText:       { fontSize: 13, fontWeight: '600' as const },
+  satDoneText:      { fontSize: 13, fontWeight: '600' as const, textAlign: 'center', flex: 1 },
+
+  satFollowUp:      { borderRadius: 12, borderWidth: 1, padding: 14, gap: 10 },
+  satFollowTitle:   { fontSize: 14, fontWeight: '700' as const },
+  satFollowSub:     { fontSize: 12, marginTop: -4 },
+  satChips:         { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chip:             { borderWidth: 1, borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5 },
+  chipText:         { fontSize: 12, fontWeight: '600' as const },
+  satInput:         { borderWidth: 1, borderRadius: 9, padding: 10, fontSize: 13, minHeight: 60, textAlignVertical: 'top' },
+  satSubmit:        { borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
+  satSubmitText:    { color: '#fff', fontSize: 14, fontWeight: '700' as const },
+
+  // Footer
+  footer:           { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, padding: 13 },
+  footerTitle:      { fontSize: 13, fontWeight: '700' as const },
+  footerSub:        { fontSize: 11, marginTop: 1 },
+  footerBtn:        { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 9 },
+  footerBtnText:    { color: '#fff', fontSize: 12, fontWeight: '600' as const },
 });

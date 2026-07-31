@@ -431,7 +431,7 @@ export const GUIDES: Guide[] = [
       },
       {
         heading: 'Still having issues?',
-        body: 'Submit a maintenance ticket from the Maintenance Tickets tab in this app, or call us on +254 700 000 000. Our certified technicians are available Mon–Sat 8am–6pm.',
+        body: 'Submit a maintenance ticket from the Maintenance Tickets tab in this app, or call us on 0717774049. Our certified technicians are available Mon–Sat 8am–6pm.',
       },
     ],
   },
