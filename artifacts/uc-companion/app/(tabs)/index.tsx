@@ -9,6 +9,7 @@ import { useCart } from '@/context/CartContext';
 import { useApi, type UCPromotion } from '@/hooks/useApi';
 import ProductCard from '@/components/ProductCard';
 import TrustBadges from '@/components/TrustBadges';
+import ImpactBubble from '@/components/ImpactBubble';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFilterActivation, effectiveLifespanDays } from '@/hooks/useNotifications';
 
@@ -200,6 +201,9 @@ export default function HomeScreen() {
             )}
           />
         )}
+
+        {/* UC Impact */}
+        <ImpactBubble />
 
         {/* Trust Badges */}
         <View style={[styles.trustSection, { backgroundColor: colors.surface, borderColor: colors.border }]}>

@@ -378,6 +378,24 @@ export function useApi() {
       isRetry?: boolean,
     ) => post<{ reply: string; suggestions: string[] }>('/api/uc/ai/water-chat', { messages, filterContext, isRetry }),
 
+    /** Fetch the live UC environmental impact stats. */
+    getImpact: () =>
+      get<{
+        totalUsers:      number;
+        litresFiltered:  number;
+        plasticsAvoided: number;
+        autoStats:       { totalUsers: number; litresFiltered: number };
+        override:        { litresOffset: number; usersOffset: number; lastUpdatedBy: string; lastUpdatedAt: string };
+        lastUpdated:     string;
+      }>('/api/uc/impact'),
+
+    /** Admin: set additive offset adjustments for the impact figures. */
+    updateImpactOverride: (
+      litresOffset: number,
+      usersOffset:  number,
+      updatedBy?:   string,
+    ) => post<{ ok: boolean }>('/api/uc/impact/override', { litresOffset, usersOffset, updatedBy }),
+
     /** Submit a thumbs-up or thumbs-down rating for an Alison response. */
     chatFeedback: (
       rating:   'up' | 'down',
