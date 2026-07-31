@@ -33,6 +33,7 @@ import {
   type PerfRecommendation,
 } from '@/hooks/useNotifications';
 import PerformanceCheckInModal from '@/components/PerformanceCheckInModal';
+import SyncToast from '@/components/SyncToast';
 
 // ── Day-offset options ────────────────────────────────────────────────────────
 const DAY_OFFSETS = [
@@ -85,6 +86,8 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
   const router = useRouter();
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showPerfModal,     setShowPerfModal]     = useState(false);
+  const [toastMessage,      setToastMessage]      = useState('');
+  const [toastVisible,      setToastVisible]      = useState(false);
 
   // Fetch the live catalogue here so the sync effect and the registration modal
   // share the same data without triggering two independent API calls.
@@ -101,8 +104,17 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
     if (filterProducts === lastSyncedProductsRef.current) return; // same reference, skip
     lastSyncedProductsRef.current = filterProducts;
 
+    const oldLifespan = activation.lifespanDays;
+    const oldName     = activation.productName;
     syncActivationWithCatalogue(filterProducts).then(updated => {
-      if (updated) onActivationChange(updated);
+      if (updated) {
+        onActivationChange(updated);
+        // Notify the user that the schedule was silently updated.
+        setToastMessage(
+          `${oldName} reminders updated: ${oldLifespan} → ${updated.lifespanDays} days`
+        );
+        setToastVisible(true);
+      }
     });
   }, [filterProducts, productsSource, activation, onActivationChange]);
 
@@ -139,6 +151,13 @@ export default function FilterTrackerSection({ activation, onActivationChange }:
 
   return (
     <>
+      {/* ── Catalogue-sync toast ──────────────────────────────────────────── */}
+      <SyncToast
+        message={toastMessage}
+        visible={toastVisible}
+        onHide={() => setToastVisible(false)}
+      />
+
       {/* ── Card ─────────────────────────────────────────────────────────── */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>My Filter</Text>
