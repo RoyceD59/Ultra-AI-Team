@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FolderKanban, CheckSquare, Users, Bell, Bot, Leaf } from "lucide-react";
+import { LayoutDashboard, FolderKanban, CheckSquare, Users, Bell, Bot, Leaf, MessageSquareOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -8,7 +8,8 @@ const navigation = [
   { name: "Tasks", href: "/tasks", icon: CheckSquare },
   { name: "Team", href: "/team", icon: Users },
   { name: "AI Monitor", href: "/ai-monitor", icon: Bot },
-  { name: "UC Impact",  href: "/impact",     icon: Leaf },
+  { name: "UC Impact",       href: "/impact",           icon: Leaf },
+  { name: "Alison Feedback", href: "/alison-feedback",  icon: MessageSquareOff },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {

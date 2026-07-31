@@ -12,8 +12,59 @@
  */
 import { Router, type Request, type Response, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { verifyToken } from "../lib/jwt.js";
+import { db, ucUsersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+// ─── Admin auth helper (DB-anchored, matches uc.ts exactly) ──────────────────
+
+/** Read the UC_ADMIN_EMAILS env list (comma-separated, lower-cased). */
+export function adminEmailList(): string[] {
+  return (process.env["UC_ADMIN_EMAILS"] ?? "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Core admin-authorization logic with injectable dependencies — used directly
+ * in production and passed stubs in unit tests.
+ *
+ * Mirrors uc.ts `isAdminRequest` exactly:
+ *   • Rejects any token whose numeric id is out of the DB-user range (≥ 1e9)
+ *     to prevent WooCommerce / dev-login principals from gaining admin access.
+ *   • Grants access when `dbUser.isAdmin` is true OR when the user's email
+ *     appears in UC_ADMIN_EMAILS (emailList param for testability).
+ */
+export async function checkAdminAuth(
+  authHeader:   string | undefined,
+  tokenVerifier: (h: string | undefined) => { id: number | string; email: string } | null,
+  userLookup:   (id: number) => Promise<{ isAdmin: boolean; email: string } | undefined>,
+  emailList:    string[] = adminEmailList(),
+): Promise<boolean> {
+  const claims = tokenVerifier(authHeader);
+  if (!claims) return false;
+  const numericId = Number(claims.id);
+  if (isNaN(numericId) || numericId <= 0 || numericId >= 1_000_000_000) return false;
+  try {
+    const dbUser = await userLookup(numericId);
+    if (!dbUser) return false;
+    return dbUser.isAdmin || emailList.includes(dbUser.email.toLowerCase());
+  } catch {
+    return false; // DB unavailable → fail closed
+  }
+}
+
+async function isAdminRequest(authHeader: string | undefined): Promise<boolean> {
+  return checkAdminAuth(
+    authHeader,
+    verifyToken,
+    id => db.query.ucUsersTable.findFirst({ where: eq(ucUsersTable.id, id) })
+         .then(u => u ? { isAdmin: u.isAdmin, email: u.email } : undefined),
+  );
+}
 
 // ─── In-memory feedback store (knowledge base) ────────────────────────────────
 // Keeps the last 500 rated exchanges. The UCFilters team can read
@@ -251,14 +302,39 @@ router.post("/uc/ai/chat-feedback", (req: Request, res: Response): void => {
   res.json({ ok: true });
 });
 
-// ─── GET /api/uc/ai/chat-feedback  (internal review endpoint) ────────────────
-router.get("/uc/ai/chat-feedback", (req: Request, res: Response): void => {
+// ─── GET /api/uc/ai/chat-feedback  (admin-only review endpoint) ──────────────
+// Protected: requires a valid admin JWT in the Authorization header.
+// Query params:
+//   rating=up|down  — filter by rating (omit for all)
+//   limit=N         — max items to return (default 100, max 200)
+router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
   const ratingFilter = req.query["rating"] as string | undefined;
-  const items = ratingFilter
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query["limit"] ?? "100"), 10) || 100));
+
+  // Server-side 7-day aggregate across the FULL log (not the paged slice)
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const weekEntries = feedbackLog.filter(e => e.ts >= cutoff);
+  const weekStats = {
+    total: weekEntries.length,
+    up:    weekEntries.filter(e => e.rating === "up").length,
+    down:  weekEntries.filter(e => e.rating === "down").length,
+  };
+
+  const filtered = ratingFilter
     ? feedbackLog.filter(e => e.rating === ratingFilter)
     : feedbackLog;
-  // Return newest first
-  res.json({ count: items.length, items: [...items].reverse().slice(0, 100) });
+
+  res.json({
+    totalInLog: feedbackLog.length,
+    weekStats,
+    count: filtered.length,
+    items: [...filtered].reverse().slice(0, limit),
+  });
 });
 
 export default router;

@@ -1,0 +1,448 @@
+/**
+ * Alison Feedback Review — ProjectHub admin page
+ *
+ * Displays customer thumbs-up / thumbs-down ratings collected by the Alison AI
+ * chat (GET /api/uc/ai/chat-feedback — admin-only, requires a valid admin JWT).
+ *
+ * The team uses this to spot recurring knowledge gaps and improve her prompts.
+ *
+ * Features:
+ *  - Login gate: email + password form calls POST /api/uc/auth/login (same
+ *    credentials as the UC Companion app); JWT stored in sessionStorage
+ *  - 7-day stats (server-computed from the full log, not the paged slice)
+ *  - Filter tabs: Unhelpful / Helpful / All with live counts
+ *  - Expand / collapse full answer text per entry
+ *  - Auto-refresh every 60 s; manual refresh button
+ */
+import { useState, useEffect, useCallback } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import {
+  ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
+  ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+const BASE             = import.meta.env.BASE_URL.replace(/\/$/, '');
+const TOKEN_KEY        = 'alison_admin_token';
+const AUTO_REFRESH_MS  = 60_000;
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface FeedbackEntry {
+  ts:       string;
+  rating:   'up' | 'down';
+  question: string;
+  answer:   string;
+}
+
+interface FeedbackResponse {
+  totalInLog: number;
+  weekStats:  { total: number; up: number; down: number };
+  count:      number;
+  items:      FeedbackEntry[];
+}
+
+type Filter = 'all' | 'down' | 'up';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function relTime(ts: string): string {
+  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (diff < 60)    return 'just now';
+  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function absTime(ts: string): string {
+  return new Date(ts).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+// ── Login gate ────────────────────────────────────────────────────────────────
+// Uses the same credentials as the UC Companion mobile app (POST /api/uc/auth/login).
+// The returned JWT is stored in sessionStorage for the duration of the session.
+
+interface LoginGateProps { onToken: (t: string) => void }
+
+function LoginGate({ onToken }: LoginGateProps) {
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [error,    setError]    = useState('');
+  const [busy,     setBusy]     = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true); setError('');
+    try {
+      // Step 1: authenticate and get a JWT
+      const loginRes = await fetch(`${BASE}/api/uc/auth/login`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email: email.trim(), password }),
+      });
+      if (loginRes.status === 401) { setError('Incorrect email or password.'); return; }
+      if (!loginRes.ok) { setError(`Login failed (${loginRes.status}). Try again.`); return; }
+
+      const { token } = await loginRes.json() as { token: string };
+      if (!token) { setError('No token returned. Please try again.'); return; }
+
+      // Step 2: verify the account actually has admin access to this page
+      const checkRes = await fetch(`${BASE}/api/uc/ai/chat-feedback`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (checkRes.status === 403) {
+        setError('Your account does not have admin access. Contact the UCFilters team.');
+        return;
+      }
+      if (!checkRes.ok) { setError(`Server error (${checkRes.status}). Try again.`); return; }
+
+      sessionStorage.setItem(TOKEN_KEY, token);
+      onToken(token);
+    } catch {
+      setError('Could not reach the server. Is the API running?');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <Card className="w-full max-w-md shadow-lg">
+        <CardHeader className="text-center pb-4">
+          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
+            <Lock className="w-6 h-6 text-primary" />
+          </div>
+          <CardTitle className="text-xl">Sign in to Alison Feedback</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            Use your UCFilters admin account (same credentials as the Companion app).
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@ucfilters.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+              />
+            </div>
+            {error && (
+              <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 rounded-md p-3">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={!email.trim() || !password || busy}
+            >
+              {busy ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ── Entry card ────────────────────────────────────────────────────────────────
+
+function EntryCard({ entry }: { entry: FeedbackEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const isDown = entry.rating === 'down';
+
+  return (
+    <Card className={cn(
+      'transition-shadow hover:shadow-md',
+      isDown ? 'border-l-4 border-l-destructive/60' : 'border-l-4 border-l-green-500/60',
+    )}>
+      <CardHeader className="pb-2 flex flex-row items-start justify-between gap-3 space-y-0">
+        <div className="flex items-start gap-2 min-w-0">
+          {isDown
+            ? <ThumbsDown className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+            : <ThumbsUp   className="w-4 h-4 text-green-500  flex-shrink-0 mt-0.5" />
+          }
+          <p className="text-sm font-medium text-foreground leading-snug">
+            {entry.question || <em className="text-muted-foreground font-normal">No question recorded</em>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Badge
+            variant={isDown ? 'destructive' : 'outline'}
+            className={cn('text-xs', !isDown && 'border-green-500 text-green-600')}
+          >
+            {isDown ? 'Unhelpful' : 'Helpful'}
+          </Badge>
+          <span
+            className="text-xs text-muted-foreground whitespace-nowrap"
+            title={absTime(entry.ts)}
+          >
+            {relTime(entry.ts)}
+          </span>
+        </div>
+      </CardHeader>
+
+      <CardContent className="pt-0 space-y-2">
+        <div className="bg-muted/40 rounded-md p-3 text-sm text-muted-foreground leading-relaxed">
+          {expanded
+            ? entry.answer
+            : `${entry.answer.slice(0, 220)}${entry.answer.length > 220 ? '…' : ''}`
+          }
+        </div>
+        {entry.answer.length > 220 && (
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            {expanded
+              ? <><ChevronUp   className="w-3 h-3" /> Show less</>
+              : <><ChevronDown className="w-3 h-3" /> Show full answer</>
+            }
+          </button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function AlisonFeedbackPage() {
+  const [token,   setToken]   = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
+  const [data,    setData]    = useState<FeedbackResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [filter,  setFilter]  = useState<Filter>('down');
+
+  const load = useCallback(async (silent = false, tok = token) => {
+    if (!tok) return;
+    if (!silent) setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${BASE}/api/uc/ai/chat-feedback`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      });
+      if (res.status === 403 || res.status === 401) {
+        sessionStorage.removeItem(TOKEN_KEY);
+        setToken(null);
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData(await res.json() as FeedbackResponse);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load feedback');
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    load();
+    const id = setInterval(() => load(true), AUTO_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [token, load]);
+
+  function handleToken(t: string) {
+    setToken(t);
+    load(false, t);
+  }
+
+  function handleSignOut() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    setToken(null);
+    setData(null);
+  }
+
+  // ── Login gate ─────────────────────────────────────────────────────────────
+  if (!token) return <LoginGate onToken={handleToken} />;
+
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const all = data?.items ?? [];
+  const ws  = data?.weekStats ?? { total: 0, up: 0, down: 0 };
+  const pct = ws.total > 0 ? Math.round((ws.up / ws.total) * 100) : null;
+
+  const shown = filter === 'all' ? all : all.filter(e => e.rating === filter);
+
+  const tabCounts = {
+    down: all.filter(e => e.rating === 'down').length,
+    up:   all.filter(e => e.rating === 'up').length,
+    all:  all.length,
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-8 animate-in-up">
+
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
+            <Bot className="w-7 h-7 text-primary" />
+            Alison Feedback
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Customer ratings on Alison's answers — use these to improve her knowledge and prompts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline" size="sm"
+            onClick={() => load()} disabled={loading}
+            className="gap-2"
+          >
+            <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+          <Button
+            variant="ghost" size="sm"
+            onClick={handleSignOut}
+            className="gap-2 text-muted-foreground"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign out
+          </Button>
+        </div>
+      </div>
+
+      {/* 7-day headline — server-side weekStats over the FULL log */}
+      {loading && !data ? (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[1,2,3].map(i => <div key={i} className="h-28 bg-muted rounded-lg animate-pulse" />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="shadow-sm">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <p className="text-sm font-medium text-muted-foreground">Ratings (last 7 days)</p>
+              <MessageSquare className="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{ws.total}</div>
+              <p className="text-xs text-muted-foreground mt-1">{data?.totalInLog ?? 0} total in log</p>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-green-500/20">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <p className="text-sm font-medium text-muted-foreground">Helpful (7 days)</p>
+              <ThumbsUp className="w-4 h-4 text-green-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-green-600">{ws.up}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {pct !== null ? `${pct}% satisfaction rate` : 'No ratings yet'}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-destructive/20 bg-destructive/5">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <p className="text-sm font-medium text-muted-foreground">Unhelpful (7 days)</p>
+              <ThumbsDown className="w-4 h-4 text-destructive" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-destructive">{ws.down}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {ws.down > 0 ? 'Review below to spot patterns' : 'None flagged this week'}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Filter tabs + list */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          {([
+            { key: 'down', label: 'Unhelpful' },
+            { key: 'up',   label: 'Helpful'   },
+            { key: 'all',  label: 'All'        },
+          ] as { key: Filter; label: string }[]).map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setFilter(tab.key)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+                filter === tab.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+              )}
+            >
+              {tab.label}
+              <span className={cn(
+                'text-xs px-1.5 py-0.5 rounded-full',
+                filter === tab.key
+                  ? 'bg-primary-foreground/20 text-primary-foreground'
+                  : 'bg-muted text-muted-foreground',
+              )}>
+                {tabCounts[tab.key]}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 rounded-md p-3">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {!loading && shown.length === 0 && !error && (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
+              <Bot className="w-10 h-10 opacity-30" />
+              <p className="text-sm font-medium">
+                {filter === 'down'
+                  ? 'No unhelpful ratings yet — Alison is doing well!'
+                  : filter === 'up'
+                    ? 'No helpful ratings recorded yet.'
+                    : 'No feedback recorded yet.'}
+              </p>
+              <p className="text-xs">Ratings appear here as customers use the Alison chat.</p>
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="space-y-3">
+          {shown.map((entry, i) => (
+            <EntryCard key={`${entry.ts}-${i}`} entry={entry} />
+          ))}
+        </div>
+
+        {shown.length > 0 && (
+          <p className="text-xs text-muted-foreground text-center pt-2">
+            Showing {shown.length} of {data?.count ?? 0} entr{shown.length === 1 ? 'y' : 'ies'}
+            {' '}· 7-day stats computed over full log of {data?.totalInLog ?? 0}
+            {' '}· Auto-refreshes every minute
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

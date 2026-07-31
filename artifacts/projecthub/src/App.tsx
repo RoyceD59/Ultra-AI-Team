@@ -13,6 +13,7 @@ import Tasks from '@/pages/tasks';
 import Team from '@/pages/team';
 import AiMonitor from '@/pages/ai-monitor';
 import ImpactPage from '@/pages/impact';
+import AlisonFeedbackPage from '@/pages/alison-feedback';
 
 const queryClient = new QueryClient();
 
@@ -27,6 +28,7 @@ function Router() {
         <Route path="/team" component={Team} />
         <Route path="/ai-monitor" component={AiMonitor} />
         <Route path="/impact" component={ImpactPage} />
+        <Route path="/alison-feedback" component={AlisonFeedbackPage} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
