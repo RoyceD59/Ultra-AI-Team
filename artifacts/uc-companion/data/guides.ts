@@ -12,6 +12,7 @@ export interface GuideSection {
   steps?: GuideStep[];     // numbered steps (rendered as 1. 2. 3. …)
   tip?: string;            // highlighted callout box
   warning?: string;        // red warning callout
+  illustrationIcon?: string; // Ionicons name for the section illustration banner
 }
 
 export type GuideCategory =
