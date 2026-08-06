@@ -35,9 +35,6 @@ export const ListMembersResponse = zod.array(ListMembersResponseItem)
  */
 
 
-
-
-
 export const CreateMemberBody = zod.object({
   "name": zod.string().min(1),
   "email": zod.string().min(1),
@@ -75,10 +72,6 @@ export const GetMemberResponse = zod.object({
 export const UpdateMemberParams = zod.object({
   "id": zod.coerce.number()
 })
-
-
-
-
 
 
 export const UpdateMemberBody = zod.object({
@@ -129,7 +122,6 @@ export const ListProjectsResponse = zod.array(ListProjectsResponseItem)
  */
 
 
-
 export const CreateProjectBody = zod.object({
   "name": zod.string().min(1),
   "description": zod.string(),
@@ -170,8 +162,6 @@ export const GetProjectResponse = zod.object({
 export const UpdateProjectParams = zod.object({
   "id": zod.coerce.number()
 })
-
-
 
 
 export const UpdateProjectBody = zod.object({
@@ -224,7 +214,8 @@ export const GetProjectSummaryResponse = zod.object({
 export const ListTasksQueryParams = zod.object({
   "projectId": zod.coerce.number().optional(),
   "assigneeId": zod.coerce.number().optional(),
-  "status": zod.enum(['todo', 'in_progress', 'in_review', 'done']).optional()
+  "status": zod.enum(['todo', 'in_progress', 'in_review', 'done']).optional(),
+  "sourcePlatform": zod.coerce.string().optional()
 })
 
 export const ListTasksResponseItem = zod.object({
@@ -236,6 +227,10 @@ export const ListTasksResponseItem = zod.object({
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']),
   "assigneeId": zod.number().nullable(),
   "dueDate": zod.coerce.date().nullable(),
+  "sourcePlatform": zod.string().nullable(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullable(),
+  "notifyVia": zod.string().nullable(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -247,7 +242,6 @@ export const ListTasksResponse = zod.array(ListTasksResponseItem)
  */
 
 
-
 export const CreateTaskBody = zod.object({
   "projectId": zod.number(),
   "title": zod.string().min(1),
@@ -255,7 +249,11 @@ export const CreateTaskBody = zod.object({
   "status": zod.enum(['todo', 'in_progress', 'in_review', 'done']),
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']),
   "assigneeId": zod.number().nullish(),
-  "dueDate": zod.coerce.date().nullish()
+  "dueDate": zod.coerce.date().nullish(),
+  "sourcePlatform": zod.string().nullish(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullish(),
+  "notifyVia": zod.string().nullish()
 })
 
 export const CreateTaskResponse = zod.object({
@@ -267,6 +265,10 @@ export const CreateTaskResponse = zod.object({
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']),
   "assigneeId": zod.number().nullable(),
   "dueDate": zod.coerce.date().nullable(),
+  "sourcePlatform": zod.string().nullable(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullable(),
+  "notifyVia": zod.string().nullable(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -288,6 +290,10 @@ export const GetTaskResponse = zod.object({
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']),
   "assigneeId": zod.number().nullable(),
   "dueDate": zod.coerce.date().nullable(),
+  "sourcePlatform": zod.string().nullable(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullable(),
+  "notifyVia": zod.string().nullable(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -301,8 +307,6 @@ export const UpdateTaskParams = zod.object({
 })
 
 
-
-
 export const UpdateTaskBody = zod.object({
   "projectId": zod.number().optional(),
   "title": zod.string().min(1).optional(),
@@ -310,7 +314,11 @@ export const UpdateTaskBody = zod.object({
   "status": zod.enum(['todo', 'in_progress', 'in_review', 'done']).optional(),
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']).optional(),
   "assigneeId": zod.number().nullish(),
-  "dueDate": zod.coerce.date().nullish()
+  "dueDate": zod.coerce.date().nullish(),
+  "sourcePlatform": zod.string().nullish(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullish(),
+  "notifyVia": zod.string().nullish()
 })
 
 export const UpdateTaskResponse = zod.object({
@@ -322,6 +330,10 @@ export const UpdateTaskResponse = zod.object({
   "priority": zod.enum(['low', 'medium', 'high', 'urgent']),
   "assigneeId": zod.number().nullable(),
   "dueDate": zod.coerce.date().nullable(),
+  "sourcePlatform": zod.string().nullable(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().nullable(),
+  "notifyVia": zod.string().nullable(),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -463,7 +475,6 @@ export const SendAnthropicMessageResponse = zod.unknown()
  */
 
 
-
 export const AiQueryBody = zod.object({
   "question": zod.string().min(1),
   "source": zod.string().optional().describe('Identifier of the calling agent (e.g. \"orchestrator\", \"analytics-agent\")')
@@ -508,4 +519,392 @@ export const PushToOrchestratorResponse = zod.object({
   "webhookUrl": zod.string().optional()
 })
 
+
+/**
+ * @summary List all contacts in the unified ledger
+ */
+export const ListContactsResponseItem = zod.object({
+  "id": zod.number(),
+  "fullName": zod.string(),
+  "role": zod.string(),
+  "organization": zod.string(),
+  "tags": zod.array(zod.string()),
+  "createdAt": zod.coerce.date()
+})
+export const ListContactsResponse = zod.array(ListContactsResponseItem)
+
+
+/**
+ * @summary Create a new contact
+ */
+
+
+export const CreateContactBody = zod.object({
+  "fullName": zod.string().min(1),
+  "role": zod.string().optional(),
+  "organization": zod.string().optional(),
+  "tags": zod.array(zod.string()).optional()
+})
+
+export const CreateContactResponse = zod.object({
+  "id": zod.number(),
+  "fullName": zod.string(),
+  "role": zod.string(),
+  "organization": zod.string(),
+  "tags": zod.array(zod.string()),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get a contact with their communication methods
+ */
+export const GetContactParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetContactResponse = zod.object({
+  "id": zod.number(),
+  "fullName": zod.string(),
+  "role": zod.string(),
+  "organization": zod.string(),
+  "tags": zod.array(zod.string()),
+  "createdAt": zod.coerce.date()
+}).and(zod.object({
+  "methods": zod.array(zod.object({
+  "id": zod.number(),
+  "contactId": zod.number(),
+  "channelType": zod.string(),
+  "channelValue": zod.string(),
+  "isPreferred": zod.boolean(),
+  "createdAt": zod.coerce.date()
+}))
+}))
+
+
+/**
+ * @summary Update a contact
+ */
+export const UpdateContactParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+
+export const UpdateContactBody = zod.object({
+  "fullName": zod.string().min(1).optional(),
+  "role": zod.string().optional(),
+  "organization": zod.string().optional(),
+  "tags": zod.array(zod.string()).optional()
+})
+
+export const UpdateContactResponse = zod.object({
+  "id": zod.number(),
+  "fullName": zod.string(),
+  "role": zod.string(),
+  "organization": zod.string(),
+  "tags": zod.array(zod.string()),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Delete a contact
+ */
+export const DeleteContactParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteContactResponse = zod.void()
+
+
+/**
+ * @summary List communication methods for a contact
+ */
+export const ListContactMethodsParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ListContactMethodsResponseItem = zod.object({
+  "id": zod.number(),
+  "contactId": zod.number(),
+  "channelType": zod.string(),
+  "channelValue": zod.string(),
+  "isPreferred": zod.boolean(),
+  "createdAt": zod.coerce.date()
+})
+export const ListContactMethodsResponse = zod.array(ListContactMethodsResponseItem)
+
+
+/**
+ * @summary Add a communication method to a contact
+ */
+export const AddContactMethodParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+
+export const AddContactMethodBody = zod.object({
+  "channelType": zod.string().min(1),
+  "channelValue": zod.string().min(1),
+  "isPreferred": zod.boolean().optional()
+})
+
+export const AddContactMethodResponse = zod.object({
+  "id": zod.number(),
+  "contactId": zod.number(),
+  "channelType": zod.string(),
+  "channelValue": zod.string(),
+  "isPreferred": zod.boolean(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Update a communication method
+ */
+export const UpdateContactMethodParams = zod.object({
+  "id": zod.coerce.number(),
+  "methodId": zod.coerce.number()
+})
+
+
+export const UpdateContactMethodBody = zod.object({
+  "channelType": zod.string().min(1).optional(),
+  "channelValue": zod.string().min(1).optional(),
+  "isPreferred": zod.boolean().optional()
+})
+
+export const UpdateContactMethodResponse = zod.object({
+  "id": zod.number(),
+  "contactId": zod.number(),
+  "channelType": zod.string(),
+  "channelValue": zod.string(),
+  "isPreferred": zod.boolean(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Delete a communication method
+ */
+export const DeleteContactMethodParams = zod.object({
+  "id": zod.coerce.number(),
+  "methodId": zod.coerce.number()
+})
+
+export const DeleteContactMethodResponse = zod.void()
+
+
+/**
+ * @summary List all platform connection statuses
+ */
+export const ListSystemStatusResponseItem = zod.object({
+  "id": zod.number(),
+  "platform": zod.string(),
+  "status": zod.string(),
+  "lastChecked": zod.coerce.date(),
+  "lastSync": zod.coerce.date().nullish(),
+  "notes": zod.string().optional(),
+  "createdAt": zod.coerce.date()
+})
+export const ListSystemStatusResponse = zod.array(ListSystemStatusResponseItem)
+
+
+/**
+ * @summary Register a new platform to monitor
+ */
+
+
+export const CreateSystemStatusBody = zod.object({
+  "platform": zod.string().min(1),
+  "status": zod.string().optional(),
+  "notes": zod.string().optional()
+})
+
+export const CreateSystemStatusResponse = zod.object({
+  "id": zod.number(),
+  "platform": zod.string(),
+  "status": zod.string(),
+  "lastChecked": zod.coerce.date(),
+  "lastSync": zod.coerce.date().nullish(),
+  "notes": zod.string().optional(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Update a platform connection status
+ */
+export const UpdateSystemStatusParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateSystemStatusBody = zod.object({
+  "status": zod.string().optional(),
+  "notes": zod.string().optional()
+})
+
+export const UpdateSystemStatusResponse = zod.object({
+  "id": zod.number(),
+  "platform": zod.string(),
+  "status": zod.string(),
+  "lastChecked": zod.coerce.date(),
+  "lastSync": zod.coerce.date().nullish(),
+  "notes": zod.string().optional(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Manually trigger a watchdog ping for a platform
+ */
+export const PingPlatformParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const PingPlatformResponse = zod.object({
+  "id": zod.number(),
+  "platform": zod.string(),
+  "status": zod.string(),
+  "lastChecked": zod.coerce.date(),
+  "lastSync": zod.coerce.date().nullish(),
+  "notes": zod.string().optional(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary List all dispatched notification logs
+ */
+export const listNotificationLogsQueryLimitDefault = 20;
+
+export const ListNotificationLogsQueryParams = zod.object({
+  "limit": zod.coerce.number().default(listNotificationLogsQueryLimitDefault)
+})
+
+export const ListNotificationLogsResponseItem = zod.object({
+  "id": zod.number(),
+  "taskId": zod.number().nullish(),
+  "contactId": zod.number().nullish(),
+  "channelType": zod.string(),
+  "channelValue": zod.string(),
+  "templateId": zod.string(),
+  "subject": zod.string().optional(),
+  "body": zod.string().optional(),
+  "status": zod.string(),
+  "errorMessage": zod.string().nullish(),
+  "sentAt": zod.coerce.date(),
+  "whatsappMessageId": zod.string().nullish().describe('Baileys message key ID used to match delivery\/read receipts'),
+  "deliveryStatus": zod.string().nullish().describe('WhatsApp receipt status: delivered | read (null = not yet acknowledged)')
+})
+export const ListNotificationLogsResponse = zod.array(ListNotificationLogsResponseItem)
+
+
+/**
+ * @summary Manually dispatch a notification to a contact
+ */
+export const DispatchNotificationBody = zod.object({
+  "contactId": zod.number(),
+  "templateId": zod.string(),
+  "taskId": zod.number().nullish(),
+  "overrideChannel": zod.string().nullish()
+})
+
+export const DispatchNotificationResponse = zod.object({
+  "success": zod.boolean(),
+  "channelUsed": zod.string(),
+  "logId": zod.number(),
+  "fallbackUsed": zod.boolean().optional(),
+  "message": zod.string().optional()
+})
+
+
+/**
+ * Validates the passcode against SESSION_SECRET and issues a short-lived
+ * JWT with type "team-session".  Required before calling any WhatsApp
+ * management or send routes.  Returns 503 if SESSION_SECRET is not
+ * configured on the server.
+ * @summary Exchange the team passcode for a signed team-session JWT
+ */
+
+
+export const IssueTeamTokenBody = zod.object({
+  "passcode": zod.string().min(1).describe('The team passcode (SESSION_SECRET value)')
+})
+
+export const IssueTeamTokenResponse = zod.object({
+  "token": zod.string().describe('Signed team-session JWT (Bearer token)')
+})
+
+
+/**
+ * @summary Get current WhatsApp connection state
+ */
+export const GetWhatsAppStatusResponse = zod.object({
+  "state": zod.enum(['disconnected', 'connecting', 'qr', 'connected']),
+  "qr": zod.string().nullish()
+})
+
+
+/**
+ * @summary Initiate WhatsApp pairing flow
+ */
+export const ConnectWhatsAppResponse = zod.object({
+  "state": zod.enum(['disconnected', 'connecting', 'qr', 'connected']),
+  "qr": zod.string().nullish()
+})
+
+
+/**
+ * @summary Log out and wipe the current WhatsApp session
+ */
+export const DisconnectWhatsAppResponse = zod.object({
+  "ok": zod.boolean(),
+  "state": zod.string()
+})
+
+
+/**
+ * @summary Send a free-form WhatsApp message to a phone number
+ */
+
+
+export const SendWhatsAppQuickMessageBody = zod.object({
+  "to": zod.string().min(1).describe('Recipient phone number (e.g. +254712345678)'),
+  "message": zod.string().min(1).describe('Plain-text message body')
+})
+
+export const SendWhatsAppQuickMessageResponse = zod.object({
+  "ok": zod.boolean(),
+  "to": zod.string().optional()
+})
+
+
+/**
+ * @summary Receive event payloads from Team AI Embedded and other connected platforms
+ */
+export const IngestWebhookBody = zod.object({
+  "event": zod.string(),
+  "sourcePlatform": zod.string(),
+  "taskData": zod.object({
+  "title": zod.string().optional(),
+  "description": zod.string().optional(),
+  "assigneeId": zod.number().nullish(),
+  "projectId": zod.number().optional(),
+  "status": zod.string().optional(),
+  "priority": zod.string().optional(),
+  "dueDate": zod.string().nullish(),
+  "resourceRequired": zod.unknown().optional(),
+  "deliveryFormat": zod.string().optional(),
+  "notifyVia": zod.string().optional()
+}).optional(),
+  "meta": zod.unknown().optional()
+})
+
+export const IngestWebhookResponse = zod.object({
+  "accepted": zod.boolean(),
+  "taskId": zod.number().nullable(),
+  "message": zod.string(),
+  "validationErrors": zod.array(zod.string()).optional()
+})
 

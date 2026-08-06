@@ -30,6 +30,15 @@ A project management app for a small B2B SaaS team: track tasks, assign owners, 
 | WooCommerce | `WC_BASE_URL`, `WC_CONSUMER_KEY`, `WC_CONSUMER_SECRET` | Live product catalogue and orders (falls back to mock when absent). |
 | M-Pesa | `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET` | Payment verification for M-Pesa orders. |
 
+## Team Horizon features (merged from AI-Team repos)
+
+- **Contacts** (`/contacts`): stakeholder/partner directory with email, WhatsApp, and SMS contact methods per person.
+- **Notifications** (`/notifications`): dispatch templated notifications (STAKEHOLDER_UPDATE / OWNER_ALERT / RESOURCE_REQ) to contacts via email or WhatsApp; delivery-receipt ticks for WhatsApp.
+- **System Status** (`/system`): watchdog dashboard for connected platforms (Team AI Embedded, etc.); manual heartbeat pings.
+- **Webhook Tester** (`/webhook`): send test payloads to `POST /api/webhook/ingest` to simulate external orchestration events.
+- **WhatsApp session**: Baileys-based persistent session with QR pairing; managed via `GET/POST /api/whatsapp/status|connect|disconnect|send` (team-auth required).
+- **Team auth**: `POST /api/auth/token` — exchange `SESSION_SECRET` for an 8-hour JWT used by WhatsApp routes.
+
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
@@ -38,6 +47,16 @@ A project management app for a small B2B SaaS team: track tasks, assign owners, 
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
+
+## Where things live (Team Horizon additions)
+
+- Contacts schema: `lib/db/src/schema/contacts.ts`, `contact-methods.ts`
+- Notification log schema: `lib/db/src/schema/notification-logs.ts`
+- System status schema: `lib/db/src/schema/system-status.ts`
+- Task orchestration fields: `sourcePlatform`, `resourceRequired`, `deliveryFormat`, `notifyVia` added to `lib/db/src/schema/tasks.ts`
+- Notification dispatch lib: `artifacts/api-server/src/lib/notifications.ts` (email + WhatsApp fallback)
+- WhatsApp session lib: `artifacts/api-server/src/lib/whatsapp.ts` (Baileys)
+- Team auth: `artifacts/projecthub/src/lib/team-auth.ts` + `artifacts/api-server/src/routes/auth.ts`
 
 ## Where things live
 

@@ -22,6 +22,16 @@ tags:
     description: Anthropic AI chat operations
   - name: ai-monitor
     description: AI project monitoring and Ultra Clear AI integration
+  - name: contacts
+    description: Unified contact ledger
+  - name: system
+    description: System status and connectivity watchdog
+  - name: notifications
+    description: Notification engine and logs
+  - name: webhook
+    description: External webhook ingestion
+  - name: whatsapp
+    description: WhatsApp session management and messaging
 paths:
   /healthz:
     get:
@@ -237,6 +247,11 @@ paths:
           required: false
           schema:
             $ref: "#/components/schemas/TaskStatus"
+        - name: sourcePlatform
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
           description: List of tasks
@@ -520,6 +535,425 @@ paths:
               schema:
                 $ref: "#/components/schemas/AiPushResult"
 
+  # ─── Contacts ───────────────────────────────────────────────────
+  /contacts:
+    get:
+      operationId: listContacts
+      tags: [contacts]
+      summary: List all contacts in the unified ledger
+      responses:
+        "200":
+          description: List of contacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Contact"
+    post:
+      operationId: createContact
+      tags: [contacts]
+      summary: Create a new contact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactInput"
+      responses:
+        "201":
+          description: Created contact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+
+  /contacts/{id}:
+    get:
+      operationId: getContact
+      tags: [contacts]
+      summary: Get a contact with their communication methods
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "200":
+          description: Contact with methods
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactWithMethods"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateContact
+      tags: [contacts]
+      summary: Update a contact
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactUpdate"
+      responses:
+        "200":
+          description: Updated contact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteContact
+      tags: [contacts]
+      summary: Delete a contact
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /contacts/{id}/methods:
+    get:
+      operationId: listContactMethods
+      tags: [contacts]
+      summary: List communication methods for a contact
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "200":
+          description: List of methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContactMethod"
+    post:
+      operationId: addContactMethod
+      tags: [contacts]
+      summary: Add a communication method to a contact
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactMethodInput"
+      responses:
+        "201":
+          description: Created method
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactMethod"
+        "404":
+          description: Contact not found
+
+  /contacts/{id}/methods/{methodId}:
+    patch:
+      operationId: updateContactMethod
+      tags: [contacts]
+      summary: Update a communication method
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContactMethodUpdate"
+      responses:
+        "200":
+          description: Updated method
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactMethod"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteContactMethod
+      tags: [contacts]
+      summary: Delete a communication method
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+        - name: methodId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ─── System Status / Watchdog ────────────────────────────────────
+  /system/status:
+    get:
+      operationId: listSystemStatus
+      tags: [system]
+      summary: List all platform connection statuses
+      responses:
+        "200":
+          description: List of platform statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SystemStatusRecord"
+    post:
+      operationId: createSystemStatus
+      tags: [system]
+      summary: Register a new platform to monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemStatusInput"
+      responses:
+        "201":
+          description: Created status record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatusRecord"
+
+  /system/status/{id}:
+    patch:
+      operationId: updateSystemStatus
+      tags: [system]
+      summary: Update a platform connection status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemStatusUpdate"
+      responses:
+        "200":
+          description: Updated status record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatusRecord"
+        "404":
+          description: Not found
+
+  /system/ping/{id}:
+    post:
+      operationId: pingPlatform
+      tags: [system]
+      summary: Manually trigger a watchdog ping for a platform
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Ping result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatusRecord"
+        "404":
+          description: Not found
+
+  # ─── Notifications ───────────────────────────────────────────────
+  /notifications/logs:
+    get:
+      operationId: listNotificationLogs
+      tags: [notifications]
+      summary: List all dispatched notification logs
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of notification logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NotificationLog"
+
+  /notifications/dispatch:
+    post:
+      operationId: dispatchNotification
+      tags: [notifications]
+      summary: Manually dispatch a notification to a contact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationDispatchInput"
+      responses:
+        "200":
+          description: Dispatch result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDispatchResult"
+
+  # ─── Team Auth ───────────────────────────────────────────────────
+  /auth/token:
+    post:
+      operationId: issueTeamToken
+      tags: [whatsapp]
+      summary: Exchange the team passcode for a signed team-session JWT
+      description: |
+        Validates the passcode against SESSION_SECRET and issues a short-lived
+        JWT with type "team-session".  Required before calling any WhatsApp
+        management or send routes.  Returns 503 if SESSION_SECRET is not
+        configured on the server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeamTokenRequest"
+      responses:
+        "200":
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeamTokenResponse"
+        "400":
+          description: Missing passcode
+        "401":
+          description: Invalid passcode
+        "503":
+          description: Auth not configured (SESSION_SECRET missing)
+
+  # ─── WhatsApp ────────────────────────────────────────────────────
+  /whatsapp/status:
+    get:
+      operationId: getWhatsAppStatus
+      tags: [whatsapp]
+      summary: Get current WhatsApp connection state
+      responses:
+        "200":
+          description: Current WhatsApp status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppStatus"
+
+  /whatsapp/connect:
+    post:
+      operationId: connectWhatsApp
+      tags: [whatsapp]
+      summary: Initiate WhatsApp pairing flow
+      responses:
+        "200":
+          description: Current WhatsApp status after connect attempt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppStatus"
+
+  /whatsapp/disconnect:
+    post:
+      operationId: disconnectWhatsApp
+      tags: [whatsapp]
+      summary: Log out and wipe the current WhatsApp session
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, state]
+                properties:
+                  ok: { type: boolean }
+                  state: { type: string }
+
+  /whatsapp/send:
+    post:
+      operationId: sendWhatsAppQuickMessage
+      tags: [whatsapp]
+      summary: Send a free-form WhatsApp message to a phone number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppSendInput"
+      responses:
+        "200":
+          description: Message queued / sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppSendResult"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+        "503":
+          description: WhatsApp not connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+
+  # ─── Webhook Ingestion ───────────────────────────────────────────
+  /webhook/ingest:
+    post:
+      operationId: ingestWebhook
+      tags: [webhook]
+      summary: Receive event payloads from Team AI Embedded and other connected platforms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookPayload"
+      responses:
+        "200":
+          description: Ingestion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookIngestResult"
+        "400":
+          description: Validation failed
+
 components:
   parameters:
     MemberId:
@@ -535,6 +969,12 @@ components:
       schema:
         type: integer
     TaskId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    ContactId:
       name: id
       in: path
       required: true
@@ -671,6 +1111,9 @@ components:
           priority,
           assigneeId,
           dueDate,
+          sourcePlatform,
+          deliveryFormat,
+          notifyVia,
           createdAt,
           updatedAt,
         ]
@@ -688,6 +1131,13 @@ components:
         dueDate:
           type: ["string", "null"]
           format: date
+        sourcePlatform:
+          type: ["string", "null"]
+        resourceRequired: {}
+        deliveryFormat:
+          type: ["string", "null"]
+        notifyVia:
+          type: ["string", "null"]
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
@@ -707,6 +1157,13 @@ components:
         dueDate:
           type: ["string", "null"]
           format: date
+        sourcePlatform:
+          type: ["string", "null"]
+        resourceRequired: {}
+        deliveryFormat:
+          type: ["string", "null"]
+        notifyVia:
+          type: ["string", "null"]
 
     TaskUpdate:
       type: object
@@ -723,6 +1180,13 @@ components:
         dueDate:
           type: ["string", "null"]
           format: date
+        sourcePlatform:
+          type: ["string", "null"]
+        resourceRequired: {}
+        deliveryFormat:
+          type: ["string", "null"]
+        notifyVia:
+          type: ["string", "null"]
 
     DashboardSummary:
       type: object
@@ -850,3 +1314,236 @@ components:
         message: { type: string }
         sentAt: { type: string, format: date-time }
         webhookUrl: { type: string }
+
+    # ─── Contact Schemas ─────────────────────────────────────────
+    Contact:
+      type: object
+      required: [id, fullName, role, organization, tags, createdAt]
+      properties:
+        id: { type: integer }
+        fullName: { type: string }
+        role: { type: string }
+        organization: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    ContactInput:
+      type: object
+      required: [fullName]
+      properties:
+        fullName: { type: string, minLength: 1 }
+        role: { type: string }
+        organization: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+
+    ContactUpdate:
+      type: object
+      properties:
+        fullName: { type: string, minLength: 1 }
+        role: { type: string }
+        organization: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+
+    ContactMethod:
+      type: object
+      required: [id, contactId, channelType, channelValue, isPreferred, createdAt]
+      properties:
+        id: { type: integer }
+        contactId: { type: integer }
+        channelType: { type: string }
+        channelValue: { type: string }
+        isPreferred: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    ContactMethodInput:
+      type: object
+      required: [channelType, channelValue]
+      properties:
+        channelType: { type: string, minLength: 1 }
+        channelValue: { type: string, minLength: 1 }
+        isPreferred: { type: boolean }
+
+    ContactMethodUpdate:
+      type: object
+      properties:
+        channelType: { type: string, minLength: 1 }
+        channelValue: { type: string, minLength: 1 }
+        isPreferred: { type: boolean }
+
+    ContactWithMethods:
+      allOf:
+        - $ref: "#/components/schemas/Contact"
+        - type: object
+          required: [methods]
+          properties:
+            methods:
+              type: array
+              items:
+                $ref: "#/components/schemas/ContactMethod"
+
+    # ─── System Status Schemas ────────────────────────────────────
+    SystemStatusRecord:
+      type: object
+      required: [id, platform, status, lastChecked, createdAt]
+      properties:
+        id: { type: integer }
+        platform: { type: string }
+        status: { type: string }
+        lastChecked: { type: string, format: date-time }
+        lastSync:
+          type: ["string", "null"]
+          format: date-time
+        notes: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    SystemStatusInput:
+      type: object
+      required: [platform]
+      properties:
+        platform: { type: string, minLength: 1 }
+        status: { type: string }
+        notes: { type: string }
+
+    SystemStatusUpdate:
+      type: object
+      properties:
+        status: { type: string }
+        notes: { type: string }
+
+    # ─── Notification Schemas ─────────────────────────────────────
+    NotificationLog:
+      type: object
+      required: [id, channelType, channelValue, templateId, status, sentAt]
+      properties:
+        id: { type: integer }
+        taskId:
+          type: ["integer", "null"]
+        contactId:
+          type: ["integer", "null"]
+        channelType: { type: string }
+        channelValue: { type: string }
+        templateId: { type: string }
+        subject: { type: string }
+        body: { type: string }
+        status: { type: string }
+        errorMessage:
+          type: ["string", "null"]
+        sentAt: { type: string, format: date-time }
+        whatsappMessageId:
+          type: ["string", "null"]
+          description: Baileys message key ID used to match delivery/read receipts
+        deliveryStatus:
+          type: ["string", "null"]
+          description: "WhatsApp receipt status: delivered | read (null = not yet acknowledged)"
+
+    NotificationDispatchInput:
+      type: object
+      required: [contactId, templateId]
+      properties:
+        contactId: { type: integer }
+        templateId: { type: string }
+        taskId:
+          type: ["integer", "null"]
+        overrideChannel:
+          type: ["string", "null"]
+
+    NotificationDispatchResult:
+      type: object
+      required: [success, channelUsed, logId]
+      properties:
+        success: { type: boolean }
+        channelUsed: { type: string }
+        logId: { type: integer }
+        fallbackUsed: { type: boolean }
+        message: { type: string }
+
+    # ─── Webhook Schemas ──────────────────────────────────────────
+    WebhookPayload:
+      type: object
+      required: [event, sourcePlatform]
+      properties:
+        event: { type: string }
+        sourcePlatform: { type: string }
+        taskData:
+          type: object
+          properties:
+            title: { type: string }
+            description: { type: string }
+            assigneeId:
+              type: ["integer", "null"]
+            projectId: { type: integer }
+            status: { type: string }
+            priority: { type: string }
+            dueDate:
+              type: ["string", "null"]
+            resourceRequired: {}
+            deliveryFormat: { type: string }
+            notifyVia: { type: string }
+        meta: {}
+
+    WebhookIngestResult:
+      type: object
+      required: [accepted, taskId, message]
+      properties:
+        accepted: { type: boolean }
+        taskId:
+          type: ["integer", "null"]
+        message: { type: string }
+        validationErrors:
+          type: array
+          items: { type: string }
+
+    # ─── Team Auth Schemas ────────────────────────────────────────
+    TeamTokenRequest:
+      type: object
+      required: [passcode]
+      properties:
+        passcode:
+          type: string
+          minLength: 1
+          description: The team passcode (SESSION_SECRET value)
+
+    TeamTokenResponse:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Signed team-session JWT (Bearer token)
+
+    # ─── WhatsApp Schemas ─────────────────────────────────────────
+    WhatsAppStatus:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [disconnected, connecting, qr, connected]
+        qr:
+          type: ["string", "null"]
+
+    WhatsAppSendInput:
+      type: object
+      required: [to, message]
+      properties:
+        to:
+          type: string
+          minLength: 1
+          description: Recipient phone number (e.g. +254712345678)
+        message:
+          type: string
+          minLength: 1
+          description: Plain-text message body
+
+    WhatsAppSendResult:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        to: { type: string }

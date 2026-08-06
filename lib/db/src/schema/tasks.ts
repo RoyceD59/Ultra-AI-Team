@@ -5,6 +5,7 @@ import {
   timestamp,
   date,
   integer,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -24,6 +25,11 @@ export const tasksTable = pgTable("tasks", {
     onDelete: "set null",
   }),
   dueDate: date("due_date", { mode: "string" }),
+  // Team Horizon orchestration fields
+  sourcePlatform: text("source_platform"), // e.g. 'team-ai-embedded', 'manual'
+  resourceRequired: jsonb("resource_required"), // flexible resource allocation object
+  deliveryFormat: text("delivery_format"), // 'pdf' | 'csv' | 'summary'
+  notifyVia: text("notify_via"), // 'email' | 'whatsapp' | 'both'
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

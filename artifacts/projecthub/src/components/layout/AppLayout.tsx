@@ -1,15 +1,23 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FolderKanban, CheckSquare, Users, Bell, Bot, Leaf, MessageSquareOff } from "lucide-react";
+import {
+  LayoutDashboard, FolderKanban, CheckSquare, Users, Bell,
+  Bot, Leaf, MessageSquareOff, Contact2, BellRing, Activity, Webhook,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Projects", href: "/projects", icon: FolderKanban },
-  { name: "Tasks", href: "/tasks", icon: CheckSquare },
-  { name: "Team", href: "/team", icon: Users },
-  { name: "AI Monitor", href: "/ai-monitor", icon: Bot },
-  { name: "UC Impact",       href: "/impact",           icon: Leaf },
-  { name: "Alison Feedback", href: "/alison-feedback",  icon: MessageSquareOff },
+  { name: "Dashboard",        href: "/",                icon: LayoutDashboard },
+  { name: "Projects",         href: "/projects",        icon: FolderKanban },
+  { name: "Tasks",            href: "/tasks",           icon: CheckSquare },
+  { name: "Team",             href: "/team",            icon: Users },
+  { name: "AI Monitor",       href: "/ai-monitor",      icon: Bot },
+  { name: "UC Impact",        href: "/impact",          icon: Leaf },
+  { name: "Alison Feedback",  href: "/alison-feedback", icon: MessageSquareOff },
+  // Team Horizon
+  { name: "Contacts",         href: "/contacts",        icon: Contact2 },
+  { name: "Notifications",    href: "/notifications",   icon: BellRing },
+  { name: "System Status",    href: "/system",          icon: Activity },
+  { name: "Webhook Tester",   href: "/webhook",         icon: Webhook },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -30,7 +38,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex-1 overflow-y-auto py-6 px-3">
           <nav className="space-y-1">
             {navigation.map((item) => {
-              const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+              const isActive =
+                location === item.href ||
+                (item.href !== "/" && location.startsWith(item.href));
               return (
                 <Link
                   key={item.name}
@@ -45,7 +55,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <item.icon
                     className={cn(
                       "w-5 h-5 flex-shrink-0 transition-colors",
-                      isActive ? "text-primary" : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/70"
+                      isActive
+                        ? "text-primary"
+                        : "text-sidebar-foreground/50 group-hover:text-sidebar-foreground/70"
                     )}
                   />
                   {item.name}
@@ -70,13 +82,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         <header className="h-16 border-b bg-background/80 backdrop-blur-md flex items-center justify-between px-8 flex-shrink-0 sticky top-0 z-10">
-          <div className="flex items-center gap-4">
-            {/* Contextual header content could go here */}
-          </div>
+          <div className="flex items-center gap-4" />
           <div className="flex items-center gap-4">
             <button className="relative p-2 text-muted-foreground hover:text-foreground transition-colors rounded-full hover:bg-accent/10">
               <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-destructive border-2 border-background"></span>
+              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-destructive border-2 border-background" />
             </button>
           </div>
         </header>

@@ -33,3 +33,8 @@ export * from "./uc-reviews";
 export * from "./uc-product-media";
 export * from "./uc-ai-feedback";
 export * from "./uc-offline-clients";
+// Team Horizon schemas
+export * from "./contacts";
+export * from "./contact-methods";
+export * from "./notification-logs";
+export * from "./system-status";

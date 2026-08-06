@@ -38,6 +38,8 @@ export interface JwtClaims {
   email:     string;
   firstName?: string;
   lastName?:  string;
+  type?:      string; // e.g. "team-session" for ProjectHub team auth
+  exp?:       number;
 }
 
 /**

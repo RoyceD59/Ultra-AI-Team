@@ -123,6 +123,13 @@ export interface Task {
   assigneeId: number | null;
   /** @nullable */
   dueDate: string | null;
+  /** @nullable */
+  sourcePlatform: string | null;
+  resourceRequired?: unknown;
+  /** @nullable */
+  deliveryFormat: string | null;
+  /** @nullable */
+  notifyVia: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -138,6 +145,13 @@ export interface TaskInput {
   assigneeId?: number | null;
   /** @nullable */
   dueDate?: string | null;
+  /** @nullable */
+  sourcePlatform?: string | null;
+  resourceRequired?: unknown;
+  /** @nullable */
+  deliveryFormat?: string | null;
+  /** @nullable */
+  notifyVia?: string | null;
 }
 
 export interface TaskUpdate {
@@ -151,6 +165,13 @@ export interface TaskUpdate {
   assigneeId?: number | null;
   /** @nullable */
   dueDate?: string | null;
+  /** @nullable */
+  sourcePlatform?: string | null;
+  resourceRequired?: unknown;
+  /** @nullable */
+  deliveryFormat?: string | null;
+  /** @nullable */
+  notifyVia?: string | null;
 }
 
 export type DashboardSummaryStatusBreakdown = {[key: string]: number};
@@ -235,13 +256,229 @@ export interface AiPushResult {
   webhookUrl?: string;
 }
 
+export interface Contact {
+  id: number;
+  fullName: string;
+  role: string;
+  organization: string;
+  tags: string[];
+  createdAt: string;
+}
+
+export interface ContactInput {
+  /** @minLength 1 */
+  fullName: string;
+  role?: string;
+  organization?: string;
+  tags?: string[];
+}
+
+export interface ContactUpdate {
+  /** @minLength 1 */
+  fullName?: string;
+  role?: string;
+  organization?: string;
+  tags?: string[];
+}
+
+export interface ContactMethod {
+  id: number;
+  contactId: number;
+  channelType: string;
+  channelValue: string;
+  isPreferred: boolean;
+  createdAt: string;
+}
+
+export interface ContactMethodInput {
+  /** @minLength 1 */
+  channelType: string;
+  /** @minLength 1 */
+  channelValue: string;
+  isPreferred?: boolean;
+}
+
+export interface ContactMethodUpdate {
+  /** @minLength 1 */
+  channelType?: string;
+  /** @minLength 1 */
+  channelValue?: string;
+  isPreferred?: boolean;
+}
+
+export type ContactWithMethods = Contact & {
+  methods: ContactMethod[];
+};
+
+export interface SystemStatusRecord {
+  id: number;
+  platform: string;
+  status: string;
+  lastChecked: string;
+  /** @nullable */
+  lastSync?: string | null;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface SystemStatusInput {
+  /** @minLength 1 */
+  platform: string;
+  status?: string;
+  notes?: string;
+}
+
+export interface SystemStatusUpdate {
+  status?: string;
+  notes?: string;
+}
+
+export interface NotificationLog {
+  id: number;
+  /** @nullable */
+  taskId?: number | null;
+  /** @nullable */
+  contactId?: number | null;
+  channelType: string;
+  channelValue: string;
+  templateId: string;
+  subject?: string;
+  body?: string;
+  status: string;
+  /** @nullable */
+  errorMessage?: string | null;
+  sentAt: string;
+  /**
+     * Baileys message key ID used to match delivery/read receipts
+     * @nullable
+     */
+  whatsappMessageId?: string | null;
+  /**
+     * WhatsApp receipt status: delivered | read (null = not yet acknowledged)
+     * @nullable
+     */
+  deliveryStatus?: string | null;
+}
+
+export interface NotificationDispatchInput {
+  contactId: number;
+  templateId: string;
+  /** @nullable */
+  taskId?: number | null;
+  /** @nullable */
+  overrideChannel?: string | null;
+}
+
+export interface NotificationDispatchResult {
+  success: boolean;
+  channelUsed: string;
+  logId: number;
+  fallbackUsed?: boolean;
+  message?: string;
+}
+
+export type WebhookPayloadTaskData = {
+  title?: string;
+  description?: string;
+  /** @nullable */
+  assigneeId?: number | null;
+  projectId?: number;
+  status?: string;
+  priority?: string;
+  /** @nullable */
+  dueDate?: string | null;
+  resourceRequired?: unknown;
+  deliveryFormat?: string;
+  notifyVia?: string;
+};
+
+export interface WebhookPayload {
+  event: string;
+  sourcePlatform: string;
+  taskData?: WebhookPayloadTaskData;
+  meta?: unknown;
+}
+
+export interface WebhookIngestResult {
+  accepted: boolean;
+  /** @nullable */
+  taskId: number | null;
+  message: string;
+  validationErrors?: string[];
+}
+
+export interface TeamTokenRequest {
+  /**
+     * The team passcode (SESSION_SECRET value)
+     * @minLength 1
+     */
+  passcode: string;
+}
+
+export interface TeamTokenResponse {
+  /** Signed team-session JWT (Bearer token) */
+  token: string;
+}
+
+export type WhatsAppStatusState = typeof WhatsAppStatusState[keyof typeof WhatsAppStatusState];
+
+
+export const WhatsAppStatusState = {
+  disconnected: 'disconnected',
+  connecting: 'connecting',
+  qr: 'qr',
+  connected: 'connected',
+} as const;
+
+export interface WhatsAppStatus {
+  state: WhatsAppStatusState;
+  /** @nullable */
+  qr?: string | null;
+}
+
+export interface WhatsAppSendInput {
+  /**
+     * Recipient phone number (e.g. +254712345678)
+     * @minLength 1
+     */
+  to: string;
+  /**
+     * Plain-text message body
+     * @minLength 1
+     */
+  message: string;
+}
+
+export interface WhatsAppSendResult {
+  ok: boolean;
+  to?: string;
+}
+
 export type ListTasksParams = {
 projectId?: number;
 assigneeId?: number;
 status?: TaskStatus;
+sourcePlatform?: string;
 };
 
 export type GetDashboardActivityParams = {
 limit?: number;
+};
+
+export type ListNotificationLogsParams = {
+limit?: number;
+};
+
+export type DisconnectWhatsApp200 = {
+  ok: boolean;
+  state: string;
+};
+
+export type SendWhatsAppQuickMessage400 = {
+  error?: string;
+};
+
+export type SendWhatsAppQuickMessage503 = {
+  error?: string;
 };
 
