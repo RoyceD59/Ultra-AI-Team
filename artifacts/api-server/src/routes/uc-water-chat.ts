@@ -14,7 +14,7 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { verifyToken } from "../lib/jwt.js";
 import { db, ucUsersTable, ucAiFeedbackTable } from "@workspace/db";
-import { eq, desc, gte, lte, and } from "drizzle-orm";
+import { eq, desc, gte, lte, and, ilike } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -391,8 +391,10 @@ router.get("/uc/ai/chat-feedback/topics", async (req: Request, res: Response): P
 // Protected: requires a valid admin JWT in the Authorization header.
 // Query params:
 //   rating=up|down  — filter by rating (omit for all)
-//   limit=N         — max items to return (default 100, max 200)
-//   page=N          — 1-based page number (default 1)
+//   keyword=<term>  — case-insensitive substring match on question text;
+//                     when set, all matching rows are returned (no pagination)
+//   limit=N         — max items per page (default 100, max 200; ignored when keyword set)
+//   page=N          — 1-based page number (default 1; ignored when keyword set)
 router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<void> => {
   if (!(await isAdminRequest(req.headers["authorization"]))) {
     res.status(403).json({ error: "Admin access required" });
@@ -400,31 +402,44 @@ router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<
   }
 
   const ratingFilter = req.query["rating"] as string | undefined;
+  const keywordRaw   = req.query["keyword"] as string | undefined;
+  const keyword      = keywordRaw?.trim().slice(0, 100) || undefined; // sanitise; max 100 chars
   const limit  = Math.min(200, Math.max(1, parseInt(String(req.query["limit"] ?? "100"), 10) || 100));
   const page   = Math.max(1, parseInt(String(req.query["page"] ?? "1"), 10) || 1);
   const offset = (page - 1) * limit;
 
   try {
-    // Build query — filter by rating when provided
-    const baseWhere = ratingFilter === "up" || ratingFilter === "down"
+    // Build query — filter by rating and/or keyword when provided
+    const ratingCond  = ratingFilter === "up" || ratingFilter === "down"
       ? eq(ucAiFeedbackTable.rating, ratingFilter)
       : undefined;
+    const keywordCond = keyword
+      ? ilike(ucAiFeedbackTable.question, `%${keyword}%`)
+      : undefined;
+    const baseWhere =
+      ratingCond && keywordCond ? and(ratingCond, keywordCond)
+      : ratingCond ?? keywordCond;
 
     const [items, allRows, weekRows] = await Promise.all([
-      // Paged result, newest first
-      db.select()
-        .from(ucAiFeedbackTable)
-        .where(baseWhere)
-        .orderBy(desc(ucAiFeedbackTable.createdAt))
-        .limit(limit)
-        .offset(offset),
+      // When keyword is active return ALL matches (no pagination); otherwise paginate
+      keyword
+        ? db.select()
+            .from(ucAiFeedbackTable)
+            .where(baseWhere)
+            .orderBy(desc(ucAiFeedbackTable.createdAt))
+        : db.select()
+            .from(ucAiFeedbackTable)
+            .where(baseWhere)
+            .orderBy(desc(ucAiFeedbackTable.createdAt))
+            .limit(limit)
+            .offset(offset),
 
-      // Total count for the filtered set
+      // Total count for the filtered set (rating filter only; keyword count is items.length)
       db.select({ id: ucAiFeedbackTable.id, rating: ucAiFeedbackTable.rating })
         .from(ucAiFeedbackTable)
-        .where(baseWhere),
+        .where(ratingCond),
 
-      // Last-7-day counts (no rating filter so stats are always full-picture)
+      // Last-7-day counts (no rating/keyword filter so stats are always full-picture)
       db.select({ id: ucAiFeedbackTable.id, rating: ucAiFeedbackTable.rating, createdAt: ucAiFeedbackTable.createdAt })
         .from(ucAiFeedbackTable)
         .where(undefined),
@@ -449,8 +464,10 @@ router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<
     res.json({
       totalInLog: allRows.length,
       weekStats,
-      count: allRows.length,
-      items: shaped,
+      // When keyword is active, count = matched items; otherwise count = total in filtered set
+      count:   keyword ? shaped.length : allRows.length,
+      items:   shaped,
+      keyword: keyword ?? null,
       page,
       limit,
     });

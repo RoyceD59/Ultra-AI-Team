@@ -25,7 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
   ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
-  BarChart2, Flag, Download,
+  BarChart2, Flag, Download, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -43,7 +43,15 @@ interface TopicData {
   mostFlagged: { question: string; count: number } | null;
 }
 
-function TopicBreakdown({ token }: { token: string }) {
+function TopicBreakdown({
+  token,
+  activeKeyword,
+  onKeywordClick,
+}: {
+  token: string;
+  activeKeyword: string | null;
+  onKeywordClick: (word: string) => void;
+}) {
   const [topics,  setTopics]  = useState<TopicData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -97,22 +105,41 @@ function TopicBreakdown({ token }: { token: string }) {
                 Not enough text to extract keywords yet.
               </p>
             ) : (
-              keywords.map(([word, count]) => (
-                <div key={word} className="flex items-center gap-3">
-                  <span className="w-24 text-xs font-mono text-foreground truncate flex-shrink-0">
-                    {word}
-                  </span>
-                  <div className="flex-1 h-5 bg-muted rounded-sm overflow-hidden">
-                    <div
-                      className="h-full bg-destructive/70 rounded-sm transition-all duration-300"
-                      style={{ width: `${Math.round((count / maxCount) * 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-xs text-muted-foreground w-6 text-right flex-shrink-0">
-                    {count}
-                  </span>
-                </div>
-              ))
+              keywords.map(([word, count]) => {
+                const isActive = activeKeyword === word;
+                return (
+                  <button
+                    key={word}
+                    onClick={() => onKeywordClick(word)}
+                    title={`Filter entries by "${word}"`}
+                    className={cn(
+                      'flex items-center gap-3 w-full rounded px-1 py-0.5 transition-colors',
+                      isActive
+                        ? 'bg-destructive/15 ring-1 ring-destructive/40'
+                        : 'hover:bg-muted/60',
+                    )}
+                  >
+                    <span className={cn(
+                      'w-24 text-xs font-mono truncate flex-shrink-0 text-left',
+                      isActive ? 'text-destructive font-semibold' : 'text-foreground',
+                    )}>
+                      {word}
+                    </span>
+                    <div className="flex-1 h-5 bg-muted rounded-sm overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-sm transition-all duration-300',
+                          isActive ? 'bg-destructive' : 'bg-destructive/70',
+                        )}
+                        style={{ width: `${Math.round((count / maxCount) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-6 text-right flex-shrink-0">
+                      {count}
+                    </span>
+                  </button>
+                );
+              })
             )}
           </CardContent>
         </Card>
@@ -167,6 +194,7 @@ interface FeedbackResponse {
   weekStats:  { total: number; up: number; down: number };
   count:      number;
   items:      FeedbackEntry[];
+  keyword:    string | null;
 }
 
 type Filter = 'all' | 'down' | 'up';
@@ -355,19 +383,27 @@ function EntryCard({ entry }: { entry: FeedbackEntry }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AlisonFeedbackPage() {
-  const [token,      setToken]      = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
-  const [data,       setData]       = useState<FeedbackResponse | null>(null);
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState('');
-  const [filter,     setFilter]     = useState<Filter>('down');
-  const [exporting,  setExporting]  = useState(false);
+  const [token,          setToken]          = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
+  const [data,           setData]           = useState<FeedbackResponse | null>(null);
+  const [loading,        setLoading]        = useState(false);
+  const [error,          setError]          = useState('');
+  const [filter,         setFilter]         = useState<Filter>('down');
+  const [keywordFilter,  setKeywordFilter]  = useState<string | null>(null);
+  const [exporting,      setExporting]      = useState(false);
 
-  const load = useCallback(async (silent = false, tok = token) => {
+  const load = useCallback(async (
+    silent  = false,
+    tok     = token,
+    kw?: string | null,               // undefined = use current keywordFilter; null = cleared
+  ) => {
     if (!tok) return;
     if (!silent) setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${BASE}/api/uc/ai/chat-feedback`, {
+      const params = new URLSearchParams();
+      const activeKw = kw !== undefined ? kw : keywordFilter;
+      if (activeKw) params.set('keyword', activeKw);
+      const res = await fetch(`${BASE}/api/uc/ai/chat-feedback?${params}`, {
         headers: { Authorization: `Bearer ${tok}` },
       });
       if (res.status === 403 || res.status === 401) {
@@ -382,7 +418,7 @@ export default function AlisonFeedbackPage() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, keywordFilter]);
 
   useEffect(() => {
     if (!token) return;
@@ -444,7 +480,11 @@ export default function AlisonFeedbackPage() {
   const pct        = ws.total > 0 ? Math.round((ws.up / ws.total) * 100) : null;
   const downEntries = all.filter(e => e.rating === 'down');
 
-  const shown = filter === 'all' ? all : all.filter(e => e.rating === filter);
+  // Server already filters by keyword and returns only the requested rating slice.
+  // We apply the rating tab filter client-side only to the server-returned slice
+  // (the server doesn't paginate when keyword is active so all matches are present).
+  const byTab = filter === 'all' ? all : all.filter(e => e.rating === filter);
+  const shown = byTab;
 
   const tabCounts = {
     down: downEntries.length,
@@ -545,7 +585,16 @@ export default function AlisonFeedbackPage() {
 
       {/* Topic breakdown — server-computed across full history, shown once data loads */}
       {!loading && data && token && (
-        <TopicBreakdown token={token} />
+        <TopicBreakdown
+          token={token}
+          activeKeyword={keywordFilter}
+          onKeywordClick={word => {
+            // Toggle: clicking the active keyword clears it; either way reload from server
+            const next = keywordFilter === word ? null : word;
+            setKeywordFilter(next);
+            load(false, token, next);
+          }}
+        />
       )}
 
       {/* Filter tabs + list */}
@@ -558,7 +607,7 @@ export default function AlisonFeedbackPage() {
           ] as { key: Filter; label: string }[]).map(tab => (
             <button
               key={tab.key}
-              onClick={() => setFilter(tab.key)}
+              onClick={() => { setFilter(tab.key); setKeywordFilter(null); load(false, token, null); }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                 filter === tab.key
@@ -579,6 +628,26 @@ export default function AlisonFeedbackPage() {
           ))}
         </div>
 
+        {/* Active keyword filter chip */}
+        {keywordFilter && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Filtered by:</span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-destructive/15 text-destructive text-xs font-medium ring-1 ring-destructive/30">
+              {keywordFilter}
+              <button
+                onClick={() => { setKeywordFilter(null); load(false, token, null); }}
+                className="ml-0.5 rounded-full hover:bg-destructive/20 p-0.5 transition-colors"
+                aria-label="Clear keyword filter"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+            <span className="text-xs text-muted-foreground">
+              — {shown.length} {shown.length === 1 ? 'entry' : 'entries'} match
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 rounded-md p-3">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -591,13 +660,19 @@ export default function AlisonFeedbackPage() {
             <CardContent className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
               <Bot className="w-10 h-10 opacity-30" />
               <p className="text-sm font-medium">
-                {filter === 'down'
-                  ? 'No unhelpful ratings yet — Alison is doing well!'
-                  : filter === 'up'
-                    ? 'No helpful ratings recorded yet.'
-                    : 'No feedback recorded yet.'}
+                {keywordFilter
+                  ? `No ${filter === 'down' ? 'unhelpful' : filter === 'up' ? 'helpful' : ''} entries contain "${keywordFilter}".`
+                  : filter === 'down'
+                    ? 'No unhelpful ratings yet — Alison is doing well!'
+                    : filter === 'up'
+                      ? 'No helpful ratings recorded yet.'
+                      : 'No feedback recorded yet.'}
               </p>
-              <p className="text-xs">Ratings appear here as customers use the Alison chat.</p>
+              <p className="text-xs">
+                {keywordFilter
+                  ? 'Try a different keyword or clear the filter to see all entries.'
+                  : 'Ratings appear here as customers use the Alison chat.'}
+              </p>
             </CardContent>
           </Card>
         )}
