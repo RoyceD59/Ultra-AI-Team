@@ -16,7 +16,7 @@
  *  - Expand / collapse full answer text per entry
  *  - Auto-refresh every 60 s; manual refresh button
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,86 +33,44 @@ const BASE             = import.meta.env.BASE_URL.replace(/\/$/, '');
 const TOKEN_KEY        = 'alison_admin_token';
 const AUTO_REFRESH_MS  = 60_000;
 
-// ── Keyword extraction ────────────────────────────────────────────────────────
-
-/** Common English + water-domain stop-words to exclude from frequency counts. */
-const STOP_WORDS = new Set([
-  // English function words
-  'a','an','the','and','or','but','in','on','at','to','for','of','with',
-  'by','from','as','is','it','its','was','are','were','be','been','being',
-  'have','has','had','do','does','did','will','would','could','should','may',
-  'might','shall','can','that','this','these','those','i','you','he','she',
-  'we','they','me','him','her','us','them','my','your','his','our','their',
-  'what','which','who','when','where','why','how','all','any','both','each',
-  'few','more','most','other','some','such','no','not','only','own','same',
-  'so','than','too','very','just','about','above','after','before','between',
-  'into','through','up','down','out','off','over','under','again','then',
-  'once','if','because','while','although','since','until','also','though',
-  // Common question / filler words
-  'get','got','use','used','using','make','made','need','want','like','know',
-  'think','go','going','comes','coming','put','see','work','works','working',
-  'try','trying','give','gives','help','helps','tell','told','let','keep',
-  'take','takes','still','already','even','much','many','good','long','new',
-  'please','hi','hello','thanks','thank','ok','yes','no','sure',
-  // Generic water / filter chat words that add no signal
-  'water','filter','filters','alison','ultra','clear','ucfilters',
-  'product','question','answer','issue','problem','time','day','days',
-]);
-
-/**
- * Tokenise a question string, strip stop-words and short tokens, and return
- * a list of meaningful lowercase words.
- */
-function tokenise(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g, ' ')   // strip punctuation (keep apostrophes, hyphens)
-    .split(/\s+/)
-    .map(w => w.replace(/^['-]+|['-]+$/g, ''))  // trim leading/trailing apostrophes/hyphens
-    .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
-}
-
-/** Return a sorted array of [word, count] pairs from the given entries. */
-function extractTopKeywords(entries: FeedbackEntry[], topN = 12): [string, number][] {
-  const freq: Map<string, number> = new Map();
-  for (const e of entries) {
-    for (const w of tokenise(e.question)) {
-      freq.set(w, (freq.get(w) ?? 0) + 1);
-    }
-  }
-  return [...freq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topN);
-}
-
-/**
- * Return the question that appears most often (exact match, normalised) in the
- * down-rated set.  Returns null when all questions are unique.
- */
-function mostFlaggedQuestion(entries: FeedbackEntry[]): { question: string; count: number } | null {
-  const freq: Map<string, number> = new Map();
-  for (const e of entries) {
-    const key = e.question.trim().toLowerCase();
-    if (key) freq.set(key, (freq.get(key) ?? 0) + 1);
-  }
-  let best: [string, number] | null = null;
-  for (const pair of freq.entries()) {
-    if (!best || pair[1] > best[1]) best = pair;
-  }
-  if (!best || best[1] < 2) return null;
-  // Return the original-cased version from the first matching entry
-  const orig = entries.find(e => e.question.trim().toLowerCase() === best![0]);
-  return { question: orig?.question ?? best[0], count: best[1] };
-}
-
 // ── TopicBreakdown component ──────────────────────────────────────────────────
+// Fetches server-computed keyword frequencies across ALL thumbs-down entries
+// (not just the current page) from GET /api/uc/ai/chat-feedback/topics.
 
-function TopicBreakdown({ downEntries }: { downEntries: FeedbackEntry[] }) {
-  const keywords = useMemo(() => extractTopKeywords(downEntries), [downEntries]);
-  const flagged   = useMemo(() => mostFlaggedQuestion(downEntries), [downEntries]);
+interface TopicData {
+  keywords:    [string, number][];
+  totalDown:   number;
+  mostFlagged: { question: string; count: number } | null;
+}
 
-  if (downEntries.length === 0) return null;
+function TopicBreakdown({ token }: { token: string }) {
+  const [topics,  setTopics]  = useState<TopicData | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`${BASE}/api/uc/ai/chat-feedback/topics`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() as Promise<TopicData> : Promise.reject(r.status))
+      .then(d => { if (!cancelled) { setTopics(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="h-48 bg-muted rounded-lg animate-pulse" />
+        <div className="h-48 bg-muted rounded-lg animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!topics || topics.totalDown === 0) return null;
+
+  const { keywords, totalDown, mostFlagged } = topics;
   const maxCount = keywords[0]?.[1] ?? 1;
 
   return (
@@ -121,7 +79,7 @@ function TopicBreakdown({ downEntries }: { downEntries: FeedbackEntry[] }) {
         <BarChart2 className="w-5 h-5 text-primary" />
         <h2 className="text-lg font-semibold tracking-tight">Topic breakdown</h2>
         <span className="text-xs text-muted-foreground ml-1">
-          — keywords from {downEntries.length} unhelpful {downEntries.length === 1 ? 'question' : 'questions'}
+          — keywords from {totalDown} unhelpful {totalDown === 1 ? 'question' : 'questions'} (full history)
         </span>
       </div>
 
@@ -160,7 +118,7 @@ function TopicBreakdown({ downEntries }: { downEntries: FeedbackEntry[] }) {
         </Card>
 
         {/* Most-flagged question */}
-        <Card className={flagged ? 'shadow-sm border-destructive/30 bg-destructive/5' : 'shadow-sm border-dashed'}>
+        <Card className={mostFlagged ? 'shadow-sm border-destructive/30 bg-destructive/5' : 'shadow-sm border-dashed'}>
           <CardHeader className="pb-3 flex flex-row items-center gap-2 space-y-0">
             <Flag className="w-4 h-4 text-destructive flex-shrink-0" />
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -168,13 +126,13 @@ function TopicBreakdown({ downEntries }: { downEntries: FeedbackEntry[] }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="pb-4">
-            {flagged ? (
+            {mostFlagged ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground leading-snug">
-                  "{flagged.question}"
+                  "{mostFlagged.question}"
                 </p>
                 <Badge variant="destructive" className="text-xs">
-                  Asked {flagged.count}× and rated unhelpful
+                  Asked {mostFlagged.count}× and rated unhelpful
                 </Badge>
                 <p className="text-xs text-muted-foreground">
                   Prioritise improving Alison's answer to this question.
@@ -541,9 +499,9 @@ export default function AlisonFeedbackPage() {
         </div>
       )}
 
-      {/* Topic breakdown — only shown when there is at least one down-rated entry */}
-      {!loading && downEntries.length > 0 && (
-        <TopicBreakdown downEntries={downEntries} />
+      {/* Topic breakdown — server-computed across full history, shown once data loads */}
+      {!loading && data && token && (
+        <TopicBreakdown token={token} />
       )}
 
       {/* Filter tabs + list */}

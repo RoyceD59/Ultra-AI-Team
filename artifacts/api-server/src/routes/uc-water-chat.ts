@@ -294,6 +294,99 @@ router.post("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise
   res.json({ ok: true });
 });
 
+// ─── Server-side keyword extraction (mirrors client stop-words exactly) ───────
+
+const STOP_WORDS = new Set([
+  // English function words
+  'a','an','the','and','or','but','in','on','at','to','for','of','with',
+  'by','from','as','is','it','its','was','are','were','be','been','being',
+  'have','has','had','do','does','did','will','would','could','should','may',
+  'might','shall','can','that','this','these','those','i','you','he','she',
+  'we','they','me','him','her','us','them','my','your','his','our','their',
+  'what','which','who','when','where','why','how','all','any','both','each',
+  'few','more','most','other','some','such','no','not','only','own','same',
+  'so','than','too','very','just','about','above','after','before','between',
+  'into','through','up','down','out','off','over','under','again','then',
+  'once','if','because','while','although','since','until','also','though',
+  // Common question / filler words
+  'get','got','use','used','using','make','made','need','want','like','know',
+  'think','go','going','comes','coming','put','see','work','works','working',
+  'try','trying','give','gives','help','helps','tell','told','let','keep',
+  'take','takes','still','already','even','much','many','good','long','new',
+  'please','hi','hello','thanks','thank','ok','yes','no','sure',
+  // Generic water / filter chat words that add no signal
+  'water','filter','filters','alison','ultra','clear','ucfilters',
+  'product','question','answer','issue','problem','time','day','days',
+]);
+
+function serverTokenise(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]/g, ' ')
+    .split(/\s+/)
+    .map((w: string) => w.replace(/^['-]+|['-]+$/g, ''))
+    .filter((w: string) => w.length >= 3 && !STOP_WORDS.has(w));
+}
+
+interface TopicSummary {
+  keywords:    [string, number][];
+  totalDown:   number;
+  mostFlagged: { question: string; count: number } | null;
+}
+
+function computeTopics(questions: string[], topN = 12): TopicSummary {
+  const freq = new Map<string, number>();
+  for (const q of questions) {
+    for (const w of serverTokenise(q)) {
+      freq.set(w, (freq.get(w) ?? 0) + 1);
+    }
+  }
+  const keywords = [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
+
+  // Most-repeated exact question (normalised)
+  const qFreq = new Map<string, { original: string; count: number }>();
+  for (const q of questions) {
+    const key = q.trim().toLowerCase();
+    if (!key) continue;
+    const existing = qFreq.get(key);
+    if (existing) existing.count++;
+    else qFreq.set(key, { original: q, count: 1 });
+  }
+  let mostFlagged: { question: string; count: number } | null = null;
+  for (const { original, count } of qFreq.values()) {
+    if (count >= 2 && (!mostFlagged || count > mostFlagged.count)) {
+      mostFlagged = { question: original, count };
+    }
+  }
+
+  return { keywords, totalDown: questions.length, mostFlagged };
+}
+
+// ─── GET /api/uc/ai/chat-feedback/topics  (admin-only) ───────────────────────
+// Returns server-computed keyword frequencies and the most-repeated question
+// across ALL thumbs-down entries in the DB (no page cap).
+router.get("/uc/ai/chat-feedback/topics", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const rows = await db
+      .select({ question: ucAiFeedbackTable.question })
+      .from(ucAiFeedbackTable)
+      .where(eq(ucAiFeedbackTable.rating, "down"));
+
+    const questions = rows.map(r => r.question);
+    res.json(computeTopics(questions));
+  } catch (err) {
+    console.error("[Alison topics] DB read failed:", err);
+    res.status(500).json({ error: "Failed to compute topics" });
+  }
+});
+
 // ─── GET /api/uc/ai/chat-feedback  (admin-only review endpoint) ──────────────
 // Protected: requires a valid admin JWT in the Authorization header.
 // Query params:
