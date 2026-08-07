@@ -25,7 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
   ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
-  BarChart2, Flag,
+  BarChart2, Flag, Download,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -355,11 +355,12 @@ function EntryCard({ entry }: { entry: FeedbackEntry }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AlisonFeedbackPage() {
-  const [token,   setToken]   = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
-  const [data,    setData]    = useState<FeedbackResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
-  const [filter,  setFilter]  = useState<Filter>('down');
+  const [token,      setToken]      = useState<string | null>(() => sessionStorage.getItem(TOKEN_KEY));
+  const [data,       setData]       = useState<FeedbackResponse | null>(null);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState('');
+  const [filter,     setFilter]     = useState<Filter>('down');
+  const [exporting,  setExporting]  = useState(false);
 
   const load = useCallback(async (silent = false, tok = token) => {
     if (!tok) return;
@@ -399,6 +400,39 @@ export default function AlisonFeedbackPage() {
     sessionStorage.removeItem(TOKEN_KEY);
     setToken(null);
     setData(null);
+  }
+
+  async function downloadCsv() {
+    if (!token) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (filter === 'up' || filter === 'down') params.set('rating', filter);
+      const res = await fetch(`${BASE}/api/uc/ai/chat-feedback/export?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 401 || res.status === 403) {
+        sessionStorage.removeItem(TOKEN_KEY);
+        setToken(null);
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob    = await res.blob();
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const url     = URL.createObjectURL(blob);
+      const a       = document.createElement('a');
+      a.href        = url;
+      a.download    = `alison-feedback-${dateStr}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
   }
 
   // ── Login gate ─────────────────────────────────────────────────────────────
@@ -441,6 +475,16 @@ export default function AlisonFeedbackPage() {
           >
             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
             Refresh
+          </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={downloadCsv}
+            disabled={exporting || !data}
+            className="gap-2"
+            title={filter === 'all' ? 'Download all feedback as CSV' : `Download ${filter === 'down' ? 'unhelpful' : 'helpful'} feedback as CSV`}
+          >
+            <Download className={cn('w-4 h-4', exporting && 'animate-pulse')} />
+            {exporting ? 'Exporting…' : 'Download CSV'}
           </Button>
           <Button
             variant="ghost" size="sm"

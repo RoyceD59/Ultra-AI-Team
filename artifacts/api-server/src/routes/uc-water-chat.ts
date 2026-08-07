@@ -14,7 +14,7 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { verifyToken } from "../lib/jwt.js";
 import { db, ucUsersTable, ucAiFeedbackTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, gte, lte, and } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -457,6 +457,127 @@ router.get("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise<
   } catch (err) {
     console.error("[Alison feedback] DB read failed:", err);
     res.status(500).json({ error: "Failed to fetch feedback" });
+  }
+});
+
+// ─── CSV helpers (exported for unit tests) ────────────────────────────────────
+
+/**
+ * Escape and sanitise a single CSV cell value (RFC 4180 + formula-injection
+ * defence).
+ *
+ * Spreadsheet formula injection defence: any value whose first non-whitespace
+ * character is `=`, `+`, `-`, or `@` is prefixed with a literal apostrophe
+ * (`'`) before the value — including any leading whitespace — so that
+ * Excel and LibreOffice treat the entire cell as plain text rather than a
+ * formula.  The apostrophe is a widely-supported text-prefix marker that is
+ * preserved through CSV import and reliably prevents formula execution.
+ *
+ * Standard RFC 4180 quoting: a cell is wrapped in double-quotes when it
+ * contains a comma, double-quote, newline, or carriage-return; any embedded
+ * double-quote is doubled.  Cells that received a formula-injection prefix
+ * are always wrapped in double-quotes to keep the output unambiguous.
+ */
+export function sanitiseCsvCell(value: string): string {
+  const str = value ?? "";
+
+  // Detect formula-injection trigger characters (first non-whitespace char).
+  // Match even when there is leading whitespace so "  =cmd" is also caught.
+  const needsFormulaPrefix = /^\s*[=+\-@]/.test(str);
+  // Prefix the WHOLE value (including any leading whitespace) with an
+  // apostrophe so the spreadsheet app sees `'<value>` and treats it as text.
+  const safe = needsFormulaPrefix ? `'${str}` : str;
+
+  // RFC 4180 quoting — always quote formula-prefixed cells for clarity
+  if (
+    needsFormulaPrefix ||
+    safe.includes('"') ||
+    safe.includes(',') ||
+    safe.includes('\n') ||
+    safe.includes('\r')
+  ) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+// ─── GET /api/uc/ai/chat-feedback/export  (admin-only CSV download) ──────────
+// Streams a CSV of the uc_ai_feedback table (ts, rating, question, answer)
+// matching optional rating and date filters.
+// Query params:
+//   rating=up|down  — filter by rating (omit for all)
+//   from=YYYY-MM-DD — include entries on or after this date (UTC)
+//   to=YYYY-MM-DD   — include entries on or before this date (UTC, inclusive)
+router.get("/uc/ai/chat-feedback/export", async (req: Request, res: Response): Promise<void> => {
+  if (!(await isAdminRequest(req.headers["authorization"]))) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  const ratingFilter = req.query["rating"] as string | undefined;
+  const fromParam    = req.query["from"]   as string | undefined;
+  const toParam      = req.query["to"]     as string | undefined;
+
+  // Build where clauses
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (ratingFilter === "up" || ratingFilter === "down") {
+    conditions.push(eq(ucAiFeedbackTable.rating, ratingFilter));
+  }
+  if (fromParam) {
+    const fromDate = new Date(`${fromParam}T00:00:00.000Z`);
+    if (!isNaN(fromDate.getTime())) {
+      conditions.push(gte(ucAiFeedbackTable.createdAt, fromDate));
+    }
+  }
+  if (toParam) {
+    const toDate = new Date(`${toParam}T23:59:59.999Z`);
+    if (!isNaN(toDate.getTime())) {
+      conditions.push(lte(ucAiFeedbackTable.createdAt, toDate));
+    }
+  }
+
+  const whereClause = conditions.length === 0
+    ? undefined
+    : conditions.length === 1
+      ? conditions[0]
+      : and(...conditions as [ReturnType<typeof eq>, ReturnType<typeof eq>, ...ReturnType<typeof eq>[]]);
+
+  try {
+    const rows = await db.select()
+      .from(ucAiFeedbackTable)
+      .where(whereClause)
+      .orderBy(desc(ucAiFeedbackTable.createdAt));
+
+    // Build file name: alison-feedback-YYYY-MM-DD.csv
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const fileName  = `alison-feedback-${dateStamp}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+    // Write header row
+    res.write("ts,rating,question,answer\r\n");
+
+    // Write data rows
+    for (const row of rows) {
+      const line = [
+        sanitiseCsvCell(row.createdAt.toISOString()),
+        sanitiseCsvCell(row.rating),
+        sanitiseCsvCell(row.question),
+        sanitiseCsvCell(row.answer),
+      ].join(",");
+      res.write(`${line}\r\n`);
+    }
+
+    res.end();
+  } catch (err) {
+    console.error("[Alison feedback export] DB read failed:", err);
+    // Only send error header if we haven't started writing yet
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to export feedback" });
+    } else {
+      res.end();
+    }
   }
 });
 

@@ -15,7 +15,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { checkAdminAuth, adminEmailList } from "../routes/uc-water-chat.js";
+import { checkAdminAuth, adminEmailList, sanitiseCsvCell } from "../routes/uc-water-chat.js";
 
 // ── Stub helpers ──────────────────────────────────────────────────────────────
 
@@ -192,3 +192,92 @@ describe("weekStats — server-side computation from full log", () => {
     assert.equal(stats.up,    150);
   });
 });
+
+// ── sanitiseCsvCell — CSV formula-injection defence ────────────────────────────
+
+describe("sanitiseCsvCell — formula-injection protection", () => {
+  // ── formula-injection prefix tests ────────────────────────────────────────
+
+  it("prefixes '=' formula with apostrophe and wraps in quotes", () => {
+    const out = sanitiseCsvCell('=HYPERLINK("https://evil.com","click")');
+    // Must begin with opening-quote + apostrophe + the original trigger char
+    assert.ok(out.startsWith('"\'='), `Expected apostrophe-prefixed quoted cell, got: ${out}`);
+    // Must NOT start with '"=' — that would still execute in spreadsheet apps
+    assert.ok(!out.startsWith('"='), "Must not start with '\"=' — that would still execute");
+  });
+
+  it("prefixes '+' formula trigger with apostrophe and wraps in quotes", () => {
+    const out = sanitiseCsvCell("+1+1");
+    assert.equal(out, '"\'+1+1"');
+  });
+
+  it("prefixes '-' formula trigger with apostrophe and wraps in quotes", () => {
+    const out = sanitiseCsvCell("-1+SUM(A1)");
+    assert.equal(out, '"\'-1+SUM(A1)"');
+  });
+
+  it("prefixes '@' formula trigger with apostrophe and wraps in quotes", () => {
+    const out = sanitiseCsvCell("@SUM(A1)");
+    assert.equal(out, '"\'@SUM(A1)"');
+  });
+
+  it("neutralises formula trigger after leading whitespace (preserves whitespace in output)", () => {
+    const out = sanitiseCsvCell("  =cmd|' /C calc'!A0");
+    // The apostrophe is prepended before the leading spaces so the whole value
+    // is rendered as text; the output is quoted because it contains a comma.
+    assert.ok(out.startsWith('"\''), `Expected apostrophe-prefixed quoted cell, got: ${out}`);
+    assert.ok(!out.includes("\t"), "Must not use tab as the injection-prevention prefix");
+    // The original value (including spaces) must be preserved inside the cell
+    assert.ok(out.includes("  =cmd"), "Original value with leading whitespace must be present");
+  });
+
+  // ── RFC 4180 quoting — no formula trigger ─────────────────────────────────
+
+  it("does not alter ordinary question text", () => {
+    const plain = "Why does my filter taste funny?";
+    assert.equal(sanitiseCsvCell(plain), plain);
+  });
+
+  it("wraps commas in double-quotes per RFC 4180", () => {
+    const out = sanitiseCsvCell("Nairobi, Kenya");
+    assert.equal(out, '"Nairobi, Kenya"');
+  });
+
+  it("escapes embedded double-quotes by doubling them (RFC 4180)", () => {
+    const out = sanitiseCsvCell('She said "hello"');
+    assert.equal(out, '"She said ""hello"""');
+  });
+
+  it("wraps newlines in double-quotes", () => {
+    const out = sanitiseCsvCell("line1\nline2");
+    assert.equal(out, '"line1\nline2"');
+  });
+
+  it("wraps carriage-return+newline in double-quotes", () => {
+    const out = sanitiseCsvCell("line1\r\nline2");
+    assert.equal(out, '"line1\r\nline2"');
+  });
+
+  // ── ISO timestamp (typical ts column value) ───────────────────────────────
+
+  it("returns plain value unchanged for normal ISO timestamps", () => {
+    // ISO timestamps start with a digit — no formula trigger, no special chars
+    const ts = "2026-07-31T12:00:00.000Z";
+    assert.equal(sanitiseCsvCell(ts), ts);
+  });
+
+  // ── Edge cases ─────────────────────────────────────────────────────────────
+
+  it("handles empty string without throwing", () => {
+    assert.equal(sanitiseCsvCell(""), "");
+  });
+
+  it("handles rating value 'up' unchanged (no special chars)", () => {
+    assert.equal(sanitiseCsvCell("up"), "up");
+  });
+
+  it("handles rating value 'down' unchanged (no special chars)", () => {
+    assert.equal(sanitiseCsvCell("down"), "down");
+  });
+});
+
