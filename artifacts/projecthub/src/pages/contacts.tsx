@@ -23,7 +23,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Edit, Tag, AtSign } from "lucide-react";
+import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Edit, Tag, AtSign, FileSpreadsheet } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getInitials, formatDate } from "@/components/shared/badges";
@@ -31,6 +31,7 @@ import type { Contact, ContactMethod } from "@workspace/api-client-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { ImportContactsDialog } from "@/components/contacts/ImportContactsDialog";
 
 const contactSchema = z.object({
   fullName: z.string().min(1, "Name is required"),
@@ -66,6 +67,7 @@ export default function Contacts() {
   const { toast } = useToast();
   
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedContactId, setSelectedContactId] = useState<number | null>(null);
 
   const createContact = useCreateContact({
@@ -126,9 +128,14 @@ export default function Contacts() {
           </h1>
           <p className="text-muted-foreground mt-1 text-lg">Central directory for project stakeholders and partners.</p>
         </div>
-        <Button onClick={handleNew} className="gap-2 shadow-sm font-semibold">
-          <Plus className="w-4 h-4" /> Add Contact
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)} className="gap-2 font-semibold">
+            <FileSpreadsheet className="w-4 h-4" /> Import from Excel
+          </Button>
+          <Button onClick={handleNew} className="gap-2 shadow-sm font-semibold">
+            <Plus className="w-4 h-4" /> Add Contact
+          </Button>
+        </div>
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -181,6 +188,11 @@ export default function Contacts() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      <ImportContactsDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+      />
 
       <ContactDetailsSheet 
         contactId={selectedContactId} 
