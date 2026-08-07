@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   useListContacts, 
   useCreateContact, 
@@ -15,7 +15,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -23,7 +23,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Edit, Tag, AtSign, FileSpreadsheet } from "lucide-react";
+import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Tag, AtSign, FileSpreadsheet, Link2, RefreshCw, Loader2, Clock } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getInitials, formatDate } from "@/components/shared/badges";
@@ -32,6 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ImportContactsDialog } from "@/components/contacts/ImportContactsDialog";
+import { ConnectSheetDialog } from "@/components/contacts/ConnectSheetDialog";
+import { getAuthHeaders } from "@/lib/team-auth";
 
 const contactSchema = z.object({
   fullName: z.string().min(1, "Name is required"),
@@ -61,14 +63,53 @@ function ContactMethodIcon({ type, className }: { type: string, className?: stri
   return <AtSign className={className} />;
 }
 
+// ─── Sheet sync status ────────────────────────────────────────────────────────
+
+interface SheetStatus {
+  connected: boolean;
+  id?: number;
+  sheetUrl?: string;
+  sheetLabel?: string;
+  lastSyncedAt?: string | null;
+}
+
+function useSheetSyncStatus() {
+  const [status, setStatus] = useState<SheetStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  async function refresh() {
+    try {
+      const res = await fetch("/api/contacts/sync/sheets");
+      if (res.ok) {
+        const data = await res.json() as SheetStatus;
+        setStatus(data);
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  return { status, loading, refresh };
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function Contacts() {
   const { data: contacts, isLoading } = useListContacts();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [sheetDialogOpen, setSheetDialogOpen] = useState(false);
   const [selectedContactId, setSelectedContactId] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const { status: sheetStatus, loading: sheetStatusLoading, refresh: refreshSheetStatus } = useSheetSyncStatus();
 
   const createContact = useCreateContact({
     mutation: {
@@ -118,20 +159,99 @@ export default function Contacts() {
     setDialogOpen(true);
   };
 
+  async function handleSyncNow() {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/contacts/sync/sheets/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getAuthHeaders() ?? {}),
+        },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      const result = await res.json() as { created: number; updated: number; skipped: number; failed: number };
+      refreshSheetStatus();
+      queryClient.invalidateQueries({ queryKey: getListContactsQueryKey() });
+      toast({
+        title: "Sync complete",
+        description: `${result.created} created, ${result.updated} updated, ${result.skipped} skipped${result.failed > 0 ? `, ${result.failed} failed` : ""}.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Sync failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="space-y-8 animate-in-up">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-3">
             <ContactIcon className="w-8 h-8 text-primary" />
             Unified Contact Ledger
           </h1>
           <p className="text-muted-foreground mt-1 text-lg">Central directory for project stakeholders and partners.</p>
+
+          {/* ── Sheet sync status strip ── */}
+          {!sheetStatusLoading && sheetStatus?.connected && (
+            <div className="flex items-center gap-3 mt-3 text-sm text-muted-foreground">
+              <Link2 className="w-4 h-4 text-green-600 shrink-0" />
+              <span className="truncate max-w-xs">
+                <span className="font-medium text-foreground">
+                  {sheetStatus.sheetLabel || "Google Sheet"}
+                </span>{" "}
+                connected
+              </span>
+              {sheetStatus.lastSyncedAt && (
+                <span className="flex items-center gap-1 text-xs">
+                  <Clock className="w-3 h-3" />
+                  {new Date(sheetStatus.lastSyncedAt).toLocaleString()}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-xs px-2"
+                onClick={handleSyncNow}
+                disabled={syncing}
+              >
+                {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                {syncing ? "Syncing…" : "Sync now"}
+              </Button>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setImportDialogOpen(true)} className="gap-2 font-semibold">
-            <FileSpreadsheet className="w-4 h-4" /> Import from Excel
-          </Button>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Import menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-2 font-semibold">
+                <FileSpreadsheet className="w-4 h-4" /> Import
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => setImportDialogOpen(true)} className="gap-2">
+                <FileSpreadsheet className="w-4 h-4" />
+                Import from Excel / CSV
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setSheetDialogOpen(true)} className="gap-2">
+                <Link2 className="w-4 h-4" />
+                {sheetStatus?.connected ? "Manage Google Sheet sync" : "Connect Google Sheet"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button onClick={handleNew} className="gap-2 shadow-sm font-semibold">
             <Plus className="w-4 h-4" /> Add Contact
           </Button>
@@ -192,6 +312,13 @@ export default function Contacts() {
       <ImportContactsDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
+      />
+
+      <ConnectSheetDialog
+        open={sheetDialogOpen}
+        onOpenChange={setSheetDialogOpen}
+        syncStatus={sheetStatus}
+        onStatusChange={refreshSheetStatus}
       />
 
       <ContactDetailsSheet 

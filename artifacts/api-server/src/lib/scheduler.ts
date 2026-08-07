@@ -6,8 +6,9 @@
 import cron from "node-cron";
 import { logger } from "./logger";
 import { generateReport, setLatestReport } from "../routes/ai/monitor";
-import { db, ucAiFeedbackTable } from "@workspace/db";
-import { lt } from "drizzle-orm";
+import { db, ucAiFeedbackTable, sheetSyncsTable } from "@workspace/db";
+import { lt, desc, eq } from "drizzle-orm";
+import { runSheetSync } from "../routes/contacts-sync.js";
 
 export function startScheduler() {
   // Daily at 08:00 UTC — generate a fresh report and push to the orchestrator
@@ -81,4 +82,42 @@ export function startScheduler() {
   logger.info(
     "Scheduler: daily AI feedback pruning job registered (02:00 UTC, default 90-day retention)",
   );
+
+  // ─── Daily 06:00 UTC: sync contacts from Google Sheets ───────────────────
+  // Reads the most-recently-configured sheet_syncs row and applies creates/updates
+  // to the contacts table. Skips silently if no sheet is connected.
+  cron.schedule("0 6 * * *", async () => {
+    logger.info("Scheduler: starting daily Google Sheets contacts sync");
+    try {
+      const [sync] = await db
+        .select()
+        .from(sheetSyncsTable)
+        .orderBy(desc(sheetSyncsTable.createdAt))
+        .limit(1);
+
+      if (!sync) {
+        logger.info("Scheduler: no Google Sheet connected — skipping contacts sync");
+        return;
+      }
+
+      const gidMatch = sync.sheetUrl.match(/[#&?]gid=(\d+)/);
+      const gid = gidMatch?.[1];
+
+      const result = await runSheetSync(sync.sheetUrl, gid);
+
+      await db
+        .update(sheetSyncsTable)
+        .set({ lastSyncedAt: new Date() })
+        .where(eq(sheetSyncsTable.id, sync.id));
+
+      logger.info(
+        { created: result.created, updated: result.updated, skipped: result.skipped, failed: result.failed },
+        "Scheduler: Google Sheets contacts sync complete",
+      );
+    } catch (err) {
+      logger.error({ err }, "Scheduler: Google Sheets contacts sync failed");
+    }
+  }, { timezone: "UTC" });
+
+  logger.info("Scheduler: daily Google Sheets contacts sync registered (06:00 UTC)");
 }

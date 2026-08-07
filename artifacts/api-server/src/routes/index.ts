@@ -17,6 +17,7 @@ import referralsRouter from "./referrals";
 // Team Horizon routers
 import authRouter from "./auth";
 import contactsRouter from "./contacts";
+import contactsSyncRouter from "./contacts-sync";
 import notificationsRouter from "./notifications";
 import systemStatusRouter from "./system-status";
 import webhookRouter from "./webhook";
@@ -42,6 +43,7 @@ router.use(referralsRouter);
 // Team Horizon
 router.use(authRouter);
 router.use(contactsRouter);
+router.use(contactsSyncRouter);
 router.use(notificationsRouter);
 router.use(systemStatusRouter);
 router.use(webhookRouter);
