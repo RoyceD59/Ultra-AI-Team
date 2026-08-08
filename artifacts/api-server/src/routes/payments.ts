@@ -288,6 +288,27 @@ router.get(
   }
 );
 
+// ─── M-Pesa STK-push callback (Safaricom posts here after the customer pays) ──
+// Safaricom POSTs to CallBackURL with ResultCode 0 on success.
+// The app also polls /payments/mpesa/status, so this is belt-and-suspenders;
+// we log it and return the required { ResultCode, ResultDesc } ack.
+router.post("/payments/mpesa/callback", (req: Request, res: Response): void => {
+  try {
+    const body = req.body as { Body?: { stkCallback?: { ResultCode?: number; ResultDesc?: string; CheckoutRequestID?: string } } };
+    const cb = body?.Body?.stkCallback;
+    if (cb) {
+      if (cb.ResultCode === 0) {
+        console.info("[M-Pesa callback] Payment confirmed:", cb.CheckoutRequestID);
+      } else {
+        console.warn("[M-Pesa callback] Payment failed:", cb.ResultDesc, cb.CheckoutRequestID);
+      }
+    }
+  } catch {
+    // Never 500 a Safaricom callback — they don't retry cleanly on errors
+  }
+  res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+});
+
 // ─── Generic verify ───────────────────────────────────────────────────────────
 router.post(
   "/payments/verify",
