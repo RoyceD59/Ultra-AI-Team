@@ -25,7 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
   ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
-  BarChart2, Flag, Download, X,
+  BarChart2, Flag, Download, X, RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -52,20 +52,31 @@ function TopicBreakdown({
   activeKeyword: string | null;
   onKeywordClick: (word: string) => void;
 }) {
-  const [topics,  setTopics]  = useState<TopicData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [topics,     setTopics]     = useState<TopicData | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [recomputing, setRecomputing] = useState(false);
+  const [fetchKey,   setFetchKey]   = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`${BASE}/api/uc/ai/chat-feedback/topics`, {
+    // recomputing=true means the user clicked the button; pass ?force=1 to bypass the server cache
+    const url = recomputing
+      ? `${BASE}/api/uc/ai/chat-feedback/topics?force=1`
+      : `${BASE}/api/uc/ai/chat-feedback/topics`;
+    fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.ok ? r.json() as Promise<TopicData> : Promise.reject(r.status))
-      .then(d => { if (!cancelled) { setTopics(d); setLoading(false); } })
-      .catch(() => { if (!cancelled) setLoading(false); });
+      .then(d => { if (!cancelled) { setTopics(d); setLoading(false); setRecomputing(false); } })
+      .catch(() => { if (!cancelled) { setLoading(false); setRecomputing(false); } });
     return () => { cancelled = true; };
-  }, [token]);
+  }, [token, fetchKey]); // recomputing is read inside effect; fetchKey change triggers it
+
+  function handleRecompute() {
+    setRecomputing(true);
+    setFetchKey(k => k + 1);
+  }
 
   if (loading) {
     return (
@@ -89,6 +100,15 @@ function TopicBreakdown({
         <span className="text-xs text-muted-foreground ml-1">
           — keywords from {totalDown} unhelpful {totalDown === 1 ? 'question' : 'questions'} (full history)
         </span>
+        <button
+          onClick={handleRecompute}
+          disabled={recomputing}
+          title="Recompute topics from latest data"
+          className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <RotateCcw className={cn('w-3.5 h-3.5', recomputing && 'animate-spin')} />
+          {recomputing ? 'Recomputing…' : 'Recompute'}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

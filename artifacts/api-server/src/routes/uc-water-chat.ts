@@ -289,6 +289,8 @@ router.post("/uc/ai/chat-feedback", async (req: Request, res: Response): Promise
       question: question.slice(0, 120),
       answer:   answer.slice(0, 120),
     });
+    // Bust the topics cache so the next GET /topics sees the new row immediately
+    bustTopicsCache();
   }
 
   res.json({ ok: true });
@@ -364,12 +366,35 @@ function computeTopics(questions: string[], topN = 12): TopicSummary {
   return { keywords, totalDown: questions.length, mostFlagged };
 }
 
+// ─── Topics cache ─────────────────────────────────────────────────────────────
+// Cached for 5 minutes; busted whenever a thumbs-down rating is submitted.
+
+const TOPICS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+let topicsCache: { data: TopicSummary; expiresAt: number } | null = null;
+
+/** Invalidate the topics cache (called after any thumbs-down submission). */
+function bustTopicsCache(): void {
+  topicsCache = null;
+}
+
 // ─── GET /api/uc/ai/chat-feedback/topics  (admin-only) ───────────────────────
 // Returns server-computed keyword frequencies and the most-repeated question
 // across ALL thumbs-down entries in the DB (no page cap).
+// Results are cached in memory for 5 minutes; cache is invalidated on every
+// new thumbs-down submission so the team never sees stale data after a review.
 router.get("/uc/ai/chat-feedback/topics", async (req: Request, res: Response): Promise<void> => {
   if (!(await isAdminRequest(req.headers["authorization"]))) {
     res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  // ?force=1 lets an authenticated admin bypass a warm cache to trigger a fresh scan
+  const forceRefresh = req.query["force"] === "1";
+
+  // Return cached result if still fresh and no force-refresh requested
+  if (!forceRefresh && topicsCache && Date.now() < topicsCache.expiresAt) {
+    res.json(topicsCache.data);
     return;
   }
 
@@ -380,7 +405,12 @@ router.get("/uc/ai/chat-feedback/topics", async (req: Request, res: Response): P
       .where(eq(ucAiFeedbackTable.rating, "down"));
 
     const questions = rows.map(r => r.question);
-    res.json(computeTopics(questions));
+    const result = computeTopics(questions);
+
+    // Store in cache
+    topicsCache = { data: result, expiresAt: Date.now() + TOPICS_CACHE_TTL_MS };
+
+    res.json(result);
   } catch (err) {
     console.error("[Alison topics] DB read failed:", err);
     res.status(500).json({ error: "Failed to compute topics" });
