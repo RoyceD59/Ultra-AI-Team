@@ -304,8 +304,8 @@ export function useApi() {
       get<StripeSessionStatus>(`/api/payments/stripe/session/${sessionId}`),
     paystackVerify: (reference: string) =>
       get<{ success: boolean; status: string }>(`/api/payments/paystack/verify/${encodeURIComponent(reference)}`),
-    paystackInit: (email: string, amount: number, callbackUrl?: string) =>
-      post<PaystackInitResponse>('/api/payments/paystack/init', { email, amount, callbackUrl }),
+    paystackInit: (email: string, amount: number) =>
+      post<PaystackInitResponse>('/api/payments/paystack/init', { email, amount }),
     verifyPayment: (reference: string, method: string) =>
       post<PaymentVerifyResult>('/api/payments/verify', { reference, method }),
     getMyReferral: () => get<UCReferralInfo>('/api/uc/referrals/my-code'),

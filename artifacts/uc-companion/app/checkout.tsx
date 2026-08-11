@@ -152,39 +152,40 @@ export default function CheckoutScreen() {
   async function handlePaystack() {
     setProcessing(true);
     try {
-      // Pass a deep-link redirect so openAuthSessionAsync can auto-close the browser
-      const redirectUri = 'uc-companion://paystack/callback';
       const r = await api.paystackInit(
         user?.email ?? 'customer@ucfilters.com',
         total,
-        redirectUri,
       );
       setProcessing(false);
 
-      // openAuthSessionAsync monitors for the redirectUri and closes the browser
-      // automatically once Paystack redirects back — no manual close needed.
-      const result = await WebBrowser.openAuthSessionAsync(r.authorizationUrl, redirectUri);
+      // Open Paystack's hosted checkout — Paystack handles all card/mobile-money data.
+      // openBrowserAsync works reliably on both Expo Go and standalone builds.
+      // After the customer pays (or cancels), they close the browser and we verify.
+      await WebBrowser.openBrowserAsync(r.authorizationUrl);
 
+      // Always verify with Paystack's API after the browser closes — regardless of
+      // whether the user paid or cancelled. The server contacts Paystack directly so
+      // the client cannot fake a successful status.
       setProcessing(true);
-
-      // Verify regardless of how the browser closed (success redirect, cancel, or dismiss).
-      // The server calls Paystack's API directly — client cannot fake a verified status.
       const verified = await api.paystackVerify(r.reference);
       setProcessing(false);
 
       if (verified.success && verified.status === 'success') {
         await createOrder('paystack', r.reference);
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        // User cancelled — don't show an error, just let them try again
       } else {
-        Alert.alert(
-          'Payment not confirmed',
-          `Paystack reported status: "${verified.status ?? 'unknown'}". No order was created. Please try again.`,
-        );
+        // Only show an error if Paystack explicitly reported a non-success status.
+        // If the user simply closed the browser the reference will be pending/abandoned
+        // and verified.success will be false — no order is created, no error shown.
+        if (verified.status && verified.status !== 'abandoned') {
+          Alert.alert(
+            'Payment not confirmed',
+            `Paystack reported status: "${verified.status}". No order was created. Please try again.`,
+          );
+        }
       }
     } catch {
       setProcessing(false);
-      Alert.alert('Error', 'Paystack payment could not be initiated or verified.');
+      Alert.alert('Error', 'Paystack payment could not be initiated. Please try again.');
     }
   }
 
