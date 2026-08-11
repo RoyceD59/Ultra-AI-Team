@@ -274,7 +274,7 @@ router.post(
         reference: psData.data.reference,
       });
     } catch {
-      res.status(500).json({ error: "Paystack error" });
+      res.status(500).json({ error: "Paystack is temporarily unavailable. Please try again.", retryable: true });
     }
   }
 );

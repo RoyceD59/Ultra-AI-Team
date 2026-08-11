@@ -185,7 +185,23 @@ export default function CheckoutScreen() {
       }
     } catch {
       setProcessing(false);
-      Alert.alert('Error', 'Paystack payment could not be initiated. Please try again.');
+      Alert.alert(
+        'Paystack Unavailable',
+        'Paystack is temporarily unavailable. You can try again or place your order with Cash on Delivery.',
+        [
+          {
+            text: 'Try again',
+            onPress: () => handlePaystack(),
+          },
+          {
+            text: 'Pay with COD instead',
+            onPress: () => {
+              setPaymentMethod('cod');
+            },
+            style: 'cancel',
+          },
+        ],
+      );
     }
   }
 
