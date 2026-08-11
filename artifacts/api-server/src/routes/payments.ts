@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { ucOrdersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
+import { sendViaResend } from "../lib/resend.js";
 
 const router = Router();
 
@@ -408,12 +409,38 @@ router.post(
           discountPercent:  0,
           discountAmount:   0,
           shippingAddress:  {},
+          webhookRecovery:  true,
         })
         .returning();
 
       console.info(
         `[Paystack webhook] Recovery order ${recovered!.id} created for ref ${reference} (${currency} ${totalKes})`
       );
+
+      // ── Alert the team ────────────────────────────────────────────────────
+      // Fire-and-forget: email failure must never block the webhook 200 response.
+      sendViaResend({
+        from: "Ultra Clear App <noreply@contacts.ucfilters.com>",
+        to: "info@ucfilters.com",
+        subject: `⚠️ Webhook recovery order #${recovered!.id} needs fulfilment`,
+        text: [
+          "A Paystack webhook recovery order was created automatically.",
+          "The customer paid but the app lost connectivity before the order was recorded.",
+          "",
+          `Order ID:   ${recovered!.id}`,
+          `Reference:  ${reference}`,
+          `Amount:     ${currency} ${totalKes.toLocaleString()}`,
+          `Customer:   ${customerEmail || "(email not provided)"}`,
+          "",
+          "Action required:",
+          "  1. Find the customer and confirm their delivery address and items.",
+          "  2. Update the order with the correct line items.",
+          "  3. Dispatch as normal once complete.",
+          "",
+          "This order is flagged as 'Webhook recovery' in the orders list.",
+        ].join("\n"),
+      }).catch(() => { /* already logged inside sendViaResend */ });
+
       res.json({ received: true, orderId: recovered!.id, recovered: true });
     } catch (err) {
       console.error("[Paystack webhook] DB error:", err);

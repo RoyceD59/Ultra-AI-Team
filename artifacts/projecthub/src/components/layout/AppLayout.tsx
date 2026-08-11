@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, FolderKanban, CheckSquare, Users, Bell,
-  Bot, Leaf, MessageSquareOff, Contact2, BellRing, Activity, Webhook,
+  Bot, Leaf, MessageSquareOff, Contact2, BellRing, Activity, Webhook, ShoppingBag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +18,7 @@ const navigation = [
   { name: "Notifications",    href: "/notifications",   icon: BellRing },
   { name: "System Status",    href: "/system",          icon: Activity },
   { name: "Webhook Tester",   href: "/webhook",         icon: Webhook },
+  { name: "Orders",           href: "/orders",           icon: ShoppingBag },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {

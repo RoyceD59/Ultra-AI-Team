@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, json } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, json, boolean } from "drizzle-orm/pg-core";
 
 /**
  * Persists orders placed through the UC Companion app.
@@ -18,6 +18,10 @@ export const ucOrdersTable = pgTable("uc_orders", {
   discountAmount:   integer("discount_amount").notNull().default(0),
   shippingAddress:  json("shipping_address").$type<Record<string, string>>(),
   dateCreated:      timestamp("date_created", { withTimezone: true }).notNull().defaultNow(),
+  // True only for orders inserted automatically by the Paystack webhook recovery
+  // path (customer paid but the app lost connectivity before createOrder fired).
+  // Set at insert time — never derived from userId heuristics.
+  webhookRecovery:  boolean("webhook_recovery").notNull().default(false),
 });
 
 export const ucOrderItemsTable = pgTable("uc_order_items", {

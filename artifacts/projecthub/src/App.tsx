@@ -19,6 +19,7 @@ import Contacts from '@/pages/contacts';
 import Notifications from '@/pages/notifications';
 import SystemStatus from '@/pages/system-status';
 import WebhookTester from '@/pages/webhook-tester';
+import OrdersPage from '@/pages/orders';
 
 const queryClient = new QueryClient();
 
@@ -39,6 +40,7 @@ function Router() {
         <Route path="/notifications" component={Notifications} />
         <Route path="/system" component={SystemStatus} />
         <Route path="/webhook" component={WebhookTester} />
+        <Route path="/orders" component={OrdersPage} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

@@ -57,6 +57,13 @@ async function applyStartupMigrations(): Promise<void> {
     );
   `);
   logger.info("Startup migration: google_oauth_credentials table ensured");
+
+  // Add webhook_recovery column to uc_orders if it doesn't exist on older deployments.
+  await pool.query(`
+    ALTER TABLE uc_orders
+      ADD COLUMN IF NOT EXISTS webhook_recovery boolean NOT NULL DEFAULT false;
+  `);
+  logger.info("Startup migration: uc_orders webhook_recovery column ensured");
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────

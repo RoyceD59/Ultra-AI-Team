@@ -1307,6 +1307,7 @@ router.get("/uc/orders", async (req: Request, res: Response): Promise<void> => {
       discountPercent: o.discountPercent,
       discountAmount:  o.discountAmount,
       promoCode:       o.promoCode ?? "",
+      webhookRecovery: o.webhookRecovery ?? false,
       lineItems:       (itemsByOrder[o.id] ?? []).map(i => ({
         productId: i.productId,
         name:      i.name,
@@ -1316,6 +1317,66 @@ router.get("/uc/orders", async (req: Request, res: Response): Promise<void> => {
     })));
   } catch {
     res.json(orderStoreFallback.filter(o => (o as Record<string,unknown>)["userId"] === userId));
+  }
+});
+
+// ─── Admin: all orders (team view) ───────────────────────────────────────────
+// Returns every order in the database regardless of userId.
+// Requires admin auth (DB-anchored: caller must be a registered admin user).
+router.get("/uc/admin/orders", async (req: Request, res: Response): Promise<void> => {
+  const admin = await isAdminRequest(req.headers["authorization"]);
+  if (!admin) {
+    // Unauthenticated or non-admin callers get a 403; recovery orders must
+    // not be readable by arbitrary users.
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const orders = await db
+      .select()
+      .from(ucOrdersTable)
+      .orderBy(desc(ucOrdersTable.dateCreated));
+
+    if (orders.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const orderIds = orders.map(o => o.id);
+    const items = await db.select().from(ucOrderItemsTable)
+      .where(inArray(ucOrderItemsTable.orderId, orderIds));
+    const itemsByOrder = items.reduce<Record<number, typeof items>>((acc, item) => {
+      (acc[item.orderId] ??= []).push(item);
+      return acc;
+    }, {});
+
+    res.json(orders.map(o => ({
+      id:               o.id,
+      userId:           o.userId,
+      status:           o.status,
+      dateCreated:      o.dateCreated,
+      total:            o.total,
+      currency:         o.currency,
+      paymentMethod:    o.paymentMethod,
+      paymentReference: o.paymentReference ?? "",
+      promoCode:        o.promoCode ?? "",
+      discountPercent:  o.discountPercent,
+      discountAmount:   o.discountAmount,
+      shippingAddress:  o.shippingAddress ?? {},
+      // True only for orders inserted by the webhook recovery path —
+      // persisted at insert time, never derived from userId heuristics.
+      webhookRecovery:  o.webhookRecovery ?? false,
+      lineItems: (itemsByOrder[o.id] ?? []).map(i => ({
+        productId: i.productId,
+        name:      i.name,
+        quantity:  i.quantity,
+        total:     i.total,
+      })),
+    })));
+  } catch (err) {
+    logger.error({ err }, "Failed to load admin orders");
+    res.status(500).json({ error: "Failed to load orders" });
   }
 });
 
