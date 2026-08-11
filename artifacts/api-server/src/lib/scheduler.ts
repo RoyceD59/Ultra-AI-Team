@@ -2,13 +2,15 @@
  * Scheduled jobs for the AI Monitor and maintenance tasks.
  * - Daily 08:00 UTC: push project report to Ultra Clear AI orchestrator.
  * - Daily 02:00 UTC: prune old uc_ai_feedback rows beyond retention window.
+ * - Daily 06:00 UTC: sync contacts from Google Sheets; alerts team on failure.
  */
 import cron from "node-cron";
 import { logger } from "./logger";
 import { generateReport, setLatestReport } from "../routes/ai/monitor";
-import { db, ucAiFeedbackTable, sheetSyncsTable } from "@workspace/db";
+import { db, ucAiFeedbackTable, sheetSyncsTable, membersTable } from "@workspace/db";
 import { lt, desc, eq } from "drizzle-orm";
 import { runSheetSync } from "../routes/contacts-sync.js";
+import { sendViaResend } from "./resend.js";
 
 export function startScheduler() {
   // Daily at 08:00 UTC — generate a fresh report and push to the orchestrator
@@ -86,6 +88,7 @@ export function startScheduler() {
   // ─── Daily 06:00 UTC: sync contacts from Google Sheets ───────────────────
   // Reads the most-recently-configured sheet_syncs row and applies creates/updates
   // to the contacts table. Skips silently if no sheet is connected.
+  // On failure: records the error in sheet_syncs and emails all team members.
   cron.schedule("0 6 * * *", async () => {
     logger.info("Scheduler: starting daily Google Sheets contacts sync");
     try {
@@ -103,11 +106,35 @@ export function startScheduler() {
       const gidMatch = sync.sheetUrl.match(/[#&?]gid=(\d+)/);
       const gid = gidMatch?.[1];
 
-      const result = await runSheetSync(sync.sheetUrl, gid);
+      let result: Awaited<ReturnType<typeof runSheetSync>>;
+      try {
+        result = await runSheetSync(sync.sheetUrl, gid);
+      } catch (syncErr) {
+        const errorMessage = syncErr instanceof Error ? syncErr.message : String(syncErr);
+        const errorAt = new Date();
 
+        logger.error({ err: syncErr }, "Scheduler: Google Sheets contacts sync failed");
+
+        // Record failure in the database
+        await db
+          .update(sheetSyncsTable)
+          .set({ lastError: errorMessage, lastErrorAt: errorAt })
+          .where(eq(sheetSyncsTable.id, sync.id));
+
+        // Notify all team members by email
+        await notifySyncFailure({
+          sheetLabel: sync.sheetLabel || sync.sheetUrl,
+          errorMessage,
+          errorAt,
+        });
+
+        return;
+      }
+
+      // Success — clear any previous error state and update lastSyncedAt
       await db
         .update(sheetSyncsTable)
-        .set({ lastSyncedAt: new Date() })
+        .set({ lastSyncedAt: new Date(), lastError: null, lastErrorAt: null })
         .where(eq(sheetSyncsTable.id, sync.id));
 
       logger.info(
@@ -115,9 +142,56 @@ export function startScheduler() {
         "Scheduler: Google Sheets contacts sync complete",
       );
     } catch (err) {
-      logger.error({ err }, "Scheduler: Google Sheets contacts sync failed");
+      logger.error({ err }, "Scheduler: Google Sheets contacts sync job error");
     }
   }, { timezone: "UTC" });
 
   logger.info("Scheduler: daily Google Sheets contacts sync registered (06:00 UTC)");
+}
+
+// ─── Sync-failure notification ────────────────────────────────────────────────
+
+async function notifySyncFailure(params: {
+  sheetLabel: string;
+  errorMessage: string;
+  errorAt: Date;
+}): Promise<void> {
+  const { sheetLabel, errorMessage, errorAt } = params;
+
+  let members: Array<{ email: string; name: string }> = [];
+  try {
+    members = await db.select({ email: membersTable.email, name: membersTable.name }).from(membersTable);
+  } catch (err) {
+    logger.error({ err }, "Scheduler: failed to load team members for sync-failure alert");
+    return;
+  }
+
+  if (!members.length) {
+    logger.warn("Scheduler: no team members found — skipping sync-failure email");
+    return;
+  }
+
+  const from = "ProjectHub <notifications@contacts.ucfilters.com>";
+  const subject = `⚠️ Google Sheets sync failed — ${sheetLabel}`;
+  const text = [
+    `The daily Google Sheets contacts sync failed at ${errorAt.toUTCString()}.`,
+    "",
+    `Sheet: ${sheetLabel}`,
+    `Error: ${errorMessage}`,
+    "",
+    "Please check that the sheet is still published and the URL is correct.",
+    "You can re-run the sync from the ProjectHub Contacts page once the issue is resolved.",
+  ].join("\n");
+
+  const results = await Promise.allSettled(
+    members.map((m) =>
+      sendViaResend({ from, to: m.email, subject, text }),
+    ),
+  );
+
+  const sent = results.filter((r) => r.status === "fulfilled" && r.value).length;
+  logger.info(
+    { sent, total: members.length },
+    "Scheduler: sync-failure alert emails dispatched",
+  );
 }

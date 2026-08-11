@@ -23,7 +23,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Tag, AtSign, FileSpreadsheet, Link2, RefreshCw, Loader2, Clock } from "lucide-react";
+import { Contact as ContactIcon, Plus, MoreVertical, Mail, Phone, MessageCircle, Building2, Trash2, Tag, AtSign, FileSpreadsheet, Link2, RefreshCw, Loader2, Clock, AlertTriangle } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getInitials, formatDate } from "@/components/shared/badges";
@@ -71,6 +71,8 @@ interface SheetStatus {
   sheetUrl?: string;
   sheetLabel?: string;
   lastSyncedAt?: string | null;
+  lastError?: string | null;
+  lastErrorAt?: string | null;
 }
 
 function useSheetSyncStatus() {
@@ -203,31 +205,49 @@ export default function Contacts() {
 
           {/* ── Sheet sync status strip ── */}
           {!sheetStatusLoading && sheetStatus?.connected && (
-            <div className="flex items-center gap-3 mt-3 text-sm text-muted-foreground">
-              <Link2 className="w-4 h-4 text-green-600 shrink-0" />
-              <span className="truncate max-w-xs">
-                <span className="font-medium text-foreground">
-                  {sheetStatus.sheetLabel || "Google Sheet"}
-                </span>{" "}
-                connected
-              </span>
-              {sheetStatus.lastSyncedAt && (
-                <span className="flex items-center gap-1 text-xs">
-                  <Clock className="w-3 h-3" />
-                  {new Date(sheetStatus.lastSyncedAt).toLocaleString()}
+            <>
+              <div className="flex items-center gap-3 mt-3 text-sm text-muted-foreground">
+                <Link2 className={`w-4 h-4 shrink-0 ${sheetStatus.lastError ? "text-amber-500" : "text-green-600"}`} />
+                <span className="truncate max-w-xs">
+                  <span className="font-medium text-foreground">
+                    {sheetStatus.sheetLabel || "Google Sheet"}
+                  </span>{" "}
+                  connected
                 </span>
+                {sheetStatus.lastSyncedAt && !sheetStatus.lastError && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <Clock className="w-3 h-3" />
+                    {new Date(sheetStatus.lastSyncedAt).toLocaleString()}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs px-2"
+                  onClick={handleSyncNow}
+                  disabled={syncing}
+                >
+                  {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {syncing ? "Syncing…" : "Sync now"}
+                </Button>
+              </div>
+              {sheetStatus.lastError && (
+                <div className="flex items-start gap-2 mt-2 px-3 py-2 rounded-md bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-800 text-sm">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-amber-800 dark:text-amber-300">Last sync failed</span>
+                    {sheetStatus.lastErrorAt && (
+                      <span className="text-amber-700 dark:text-amber-400 text-xs ml-2">
+                        {new Date(sheetStatus.lastErrorAt).toLocaleString()}
+                      </span>
+                    )}
+                    <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5 truncate">
+                      {sheetStatus.lastError}
+                    </p>
+                  </div>
+                </div>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1.5 text-xs px-2"
-                onClick={handleSyncNow}
-                disabled={syncing}
-              >
-                {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                {syncing ? "Syncing…" : "Sync now"}
-              </Button>
-            </div>
+            </>
           )}
         </div>
 

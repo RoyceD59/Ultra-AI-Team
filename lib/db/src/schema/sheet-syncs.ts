@@ -10,6 +10,8 @@ export const sheetSyncsTable = pgTable("sheet_syncs", {
   sheetUrl: text("sheet_url").notNull(),
   sheetLabel: text("sheet_label").notNull().default(""),
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

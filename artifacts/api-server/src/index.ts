@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
+import { pool } from "@workspace/db";
 
 // ─── Global error guards ──────────────────────────────────────────────────────
 // Prevent any unhandled rejection or uncaught exception from silently crashing
@@ -32,6 +33,18 @@ function shutdown(server: ReturnType<typeof app.listen>, signal: string) {
   }, 10_000).unref();
 }
 
+// ─── Startup migration ────────────────────────────────────────────────────────
+// Add any new columns to sheet_syncs that may not exist on older deployments.
+// Uses IF NOT EXISTS so it is safe to run on every startup.
+async function applyStartupMigrations(): Promise<void> {
+  await pool.query(`
+    ALTER TABLE sheet_syncs
+      ADD COLUMN IF NOT EXISTS last_error      text,
+      ADD COLUMN IF NOT EXISTS last_error_at   timestamptz;
+  `);
+  logger.info("Startup migration: sheet_syncs error columns ensured");
+}
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const rawPort = process.env["PORT"];
 
@@ -47,15 +60,23 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const server = app.listen(port, (err?: Error) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
+applyStartupMigrations()
+  .then(() => {
+    const server = app.listen(port, (err?: Error) => {
+      if (err) {
+        logger.error({ err }, "Error listening on port");
+        process.exit(1);
+      }
+
+      logger.info({ port }, "Server listening");
+      startScheduler();
+    });
+
+    process.on("SIGTERM", () => shutdown(server, "SIGTERM"));
+    process.on("SIGINT",  () => shutdown(server, "SIGINT"));
+  })
+  .catch((err) => {
+    logger.error({ err }, "Startup migration failed — exiting");
     process.exit(1);
-  }
+  });
 
-  logger.info({ port }, "Server listening");
-  startScheduler();
-});
-
-process.on("SIGTERM", () => shutdown(server, "SIGTERM"));
-process.on("SIGINT",  () => shutdown(server, "SIGINT"));

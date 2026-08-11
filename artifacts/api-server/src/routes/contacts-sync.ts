@@ -299,6 +299,8 @@ router.get("/contacts/sync/sheets", async (_req, res): Promise<void> => {
     sheetUrl: sync.sheetUrl,
     sheetLabel: sync.sheetLabel,
     lastSyncedAt: sync.lastSyncedAt,
+    lastError: sync.lastError ?? null,
+    lastErrorAt: sync.lastErrorAt ?? null,
   });
 });
 
@@ -371,16 +373,24 @@ router.post("/contacts/sync/sheets/run", async (req, res): Promise<void> => {
 
     const result = await runSheetSync(sync.sheetUrl, gid);
 
-    // Update lastSyncedAt
+    // Update lastSyncedAt and clear any previous error state
     await db
       .update(sheetSyncsTable)
-      .set({ lastSyncedAt: new Date() })
+      .set({ lastSyncedAt: new Date(), lastError: null, lastErrorAt: null })
       .where(eq(sheetSyncsTable.id, sync.id));
 
     res.json({ ...result, syncedAt: new Date().toISOString() });
   } catch (err) {
     logger.error({ err }, "Sheet sync: manual sync failed");
     const message = err instanceof Error ? err.message : "Sync failed";
+
+    // Record the failure so the warning badge reflects current health
+    await db
+      .update(sheetSyncsTable)
+      .set({ lastError: message, lastErrorAt: new Date() })
+      .where(eq(sheetSyncsTable.id, sync.id))
+      .catch(() => { /* best-effort — don't mask the original error */ });
+
     res.status(502).json({ error: message });
   }
 });
