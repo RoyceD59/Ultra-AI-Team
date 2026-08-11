@@ -40,3 +40,4 @@ export * from "./notification-logs";
 export * from "./system-status";
 export * from "./sheet-syncs";
 export * from "./google-oauth-credentials";
+export * from "./mpesa-stk-initiations";

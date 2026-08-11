@@ -1,10 +1,11 @@
 import { Router, type Request, type Response } from "express";
 import { createHmac } from "node:crypto";
 import { db } from "@workspace/db";
-import { ucOrdersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { ucOrdersTable, mpesaStkInitiationsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 import type Stripe from "stripe";
 import { sendViaResend } from "../lib/resend.js";
+import { buildOrderReceiptEmail } from "../lib/email.js";
 
 const router = Router();
 
@@ -54,9 +55,35 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
   const passkey = process.env["MPESA_PASSKEY"];
   const token = await getMpesaToken();
 
+  const normalizedPhone = phone.replace(/^\+/, "").replace(/^0/, "254");
+  const expectedAmount  = Math.ceil(amount);
+  const expiresAt       = new Date(Date.now() + 15 * 60 * 1000); // 15-minute window
+
   if (!token || !shortcode || !passkey) {
+    // Sandbox / demo mode — generate a mock CheckoutRequestID.
+    const mockCheckoutRequestId = `ws_CO_${Date.now()}`;
+
+    // Persist the initiation record BEFORE issuing the CheckoutRequestID.
+    // If this fails, we must NOT return a CheckoutRequestID — without the record
+    // the callback cannot verify ownership and any payment would be unrecoverable.
+    try {
+      await db.insert(mpesaStkInitiationsTable).values({
+        checkoutRequestId: mockCheckoutRequestId,
+        expectedAmount,
+        phone: normalizedPhone,
+        expiresAt,
+      }).onConflictDoNothing();
+    } catch (err) {
+      console.error("[M-Pesa] Failed to persist initiation record — cannot issue STK push:", err);
+      res.status(500).json({
+        error: "Checkout temporarily unavailable — please try again",
+        retryable: true,
+      });
+      return;
+    }
+
     res.json({
-      checkoutRequestId: `ws_CO_${Date.now()}`,
+      checkoutRequestId: mockCheckoutRequestId,
       merchantRequestId: `MR-${Date.now()}`,
       responseCode: "0",
       responseDescription: "Success. Request accepted for processing",
@@ -80,10 +107,10 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
           Password: password,
           Timestamp: timestamp,
           TransactionType: "CustomerPayBillOnline",
-          Amount: Math.ceil(amount),
-          PartyA: phone.replace(/^\+/, "").replace(/^0/, "254"),
+          Amount: expectedAmount,
+          PartyA: normalizedPhone,
           PartyB: shortcode,
-          PhoneNumber: phone.replace(/^\+/, "").replace(/^0/, "254"),
+          PhoneNumber: normalizedPhone,
           CallBackURL: `${process.env["API_BASE_URL"] || "https://team-horizon--jerryaroyce.replit.app"}/api/payments/mpesa/callback`,
           AccountReference: `Order-${orderId}`,
           TransactionDesc: "UC Filter Purchase",
@@ -91,8 +118,53 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
       }
     );
     const stkData = (await stkRes.json()) as Record<string, string>;
+    const checkoutRequestId = stkData["CheckoutRequestID"];
+
+    if (!checkoutRequestId) {
+      res.status(500).json({ error: "M-Pesa request failed — no checkout reference", retryable: true });
+      return;
+    }
+
+    // Persist the initiation record immediately.
+    // If this fails, do NOT return the CheckoutRequestID — without the record the
+    // callback cannot verify ownership and any payment made on this push would be
+    // unrecoverable.  The client should retry; the next attempt will succeed if the
+    // DB is healthy.  The team is alerted so the (expired) push can be monitored.
+    try {
+      await db.insert(mpesaStkInitiationsTable).values({
+        checkoutRequestId,
+        expectedAmount,
+        phone: normalizedPhone,
+        expiresAt,
+      }).onConflictDoNothing();
+    } catch (err) {
+      console.error(
+        `[M-Pesa] CRITICAL: STK push sent (ref=${checkoutRequestId}) but initiation record failed to persist:`,
+        err,
+      );
+      // Alert team — the push was sent but can't be recovered by the callback.
+      sendViaResend({
+        from:    "Ultra Clear App <noreply@contacts.ucfilters.com>",
+        to:      "info@ucfilters.com",
+        subject: `⚠️ M-Pesa push ${checkoutRequestId} sent but NOT tracked — manual check needed`,
+        text: [
+          "An M-Pesa STK push was accepted by Safaricom but the correlation record",
+          "could not be saved to the database (database error).",
+          "If the customer pays, the callback will reject it as unrecognised.",
+          "",
+          `Checkout Ref: ${checkoutRequestId}`,
+          `Amount:       KES ${expectedAmount}`,
+          `Phone:        ${normalizedPhone}`,
+          "",
+          "Action: check M-Pesa Business Console and fulfil manually if payment received.",
+        ].join("\n"),
+      }).catch(() => {});
+      res.status(500).json({ error: "Checkout error — please try again", retryable: true });
+      return;
+    }
+
     res.json({
-      checkoutRequestId: stkData["CheckoutRequestID"],
+      checkoutRequestId,
       merchantRequestId: stkData["MerchantRequestID"],
       responseCode: stkData["ResponseCode"],
       responseDescription: stkData["ResponseDescription"],
@@ -536,23 +608,395 @@ router.post(
 
 // ─── M-Pesa STK-push callback (Safaricom posts here after the customer pays) ──
 // Safaricom POSTs to CallBackURL with ResultCode 0 on success.
-// The app also polls /payments/mpesa/status, so this is belt-and-suspenders;
-// we log it and return the required { ResultCode, ResultDesc } ack.
-router.post("/payments/mpesa/callback", (req: Request, res: Response): void => {
+// If the app closed during the STK-push wait the polling loop never resolved,
+// so this callback is the only recovery path for orders where the customer paid
+// but the app did not see the result.
+//
+// Security: Safaricom does not sign callbacks with HMAC.  To prevent any
+// internet client from forging a "paid" callback (triggering fulfilment without
+// an actual payment), we independently query the Daraja STK query API to
+// confirm payment before touching the database.
+//   - Daraja confirms ResultCode 0  → proceed.
+//   - Daraja returns non-0 / unknown → log + ack without any DB action.
+//   - Daraja unavailable (network / token failure) → log warning + fall through
+//     (we cannot silently drop a potentially valid payment in a transient outage).
+//   - Daraja credentials absent (sandbox / dev) → fall through without verify.
+//
+// Strategy (mirrors the Paystack webhook):
+//   1. ResultCode from Safaricom !== 0 → log and ack; no order action.
+//   2. Daraja verification → reject if Daraja does not confirm payment.
+//   3. Existing order found by paymentReference (CheckoutRequestID):
+//        - Atomic UPDATE WHERE status='pending' wins race → send customer email.
+//        - UPDATE matched 0 rows → already advanced; ack silently.
+//   4. No existing order → create a recovery record + alert the team.
+//   5. Unique-constraint race on insert → ack (concurrent callback handled).
+//   Always respond with { ResultCode: 0, ResultDesc: "Accepted" } — Safaricom
+//   does not retry cleanly on non-200 or error-ResultCode responses.
+
+/**
+ * Independently verify a completed M-Pesa STK payment via the Daraja query API.
+ * Returns:
+ *   "confirmed"   — Daraja says ResultCode 0 (payment succeeded).
+ *   "rejected"    — Daraja returned non-0 or unrecognized reference.
+ *   "unavailable" — credentials missing or API call failed (transient).
+ */
+export async function verifyMpesaPaymentOnDaraja(
+  checkoutRequestId: string
+): Promise<"confirmed" | "rejected" | "unavailable"> {
+  const token     = await getMpesaToken();
+  const shortcode = process.env["MPESA_SHORTCODE"];
+  const passkey   = process.env["MPESA_PASSKEY"];
+
+  if (!token || !shortcode || !passkey) return "unavailable";
+
   try {
-    const body = req.body as { Body?: { stkCallback?: { ResultCode?: number; ResultDesc?: string; CheckoutRequestID?: string } } };
-    const cb = body?.Body?.stkCallback;
-    if (cb) {
-      if (cb.ResultCode === 0) {
-        console.info("[M-Pesa callback] Payment confirmed:", cb.CheckoutRequestID);
-      } else {
-        console.warn("[M-Pesa callback] Payment failed:", cb.ResultDesc, cb.CheckoutRequestID);
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+    const password  = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
+    const env       = process.env["MPESA_ENV"] === "production" ? "api" : "sandbox";
+
+    const qRes = await fetch(
+      `https://${env}.safaricom.co.ke/mpesa/stkpushquery/v1/query`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          BusinessShortCode: shortcode,
+          Password:          password,
+          Timestamp:         timestamp,
+          CheckoutRequestID: checkoutRequestId,
+        }),
       }
-    }
+    );
+    const qData = (await qRes.json()) as Record<string, string>;
+    return qData["ResultCode"] === "0" ? "confirmed" : "rejected";
   } catch {
-    // Never 500 a Safaricom callback — they don't retry cleanly on errors
+    return "unavailable";
   }
-  res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+}
+
+router.post("/payments/mpesa/callback", async (req: Request, res: Response): Promise<void> => {
+  // Always ack — Safaricom retries are unreliable on non-200 responses.
+  const ack = (extra?: Record<string, unknown>) =>
+    res.json({ ResultCode: 0, ResultDesc: "Accepted", ...extra });
+
+  try {
+    const body = req.body as {
+      Body?: {
+        stkCallback?: {
+          ResultCode?: number;
+          ResultDesc?: string;
+          CheckoutRequestID?: string;
+          MerchantRequestID?: string;
+          CallbackMetadata?: {
+            Item?: Array<{ Name: string; Value?: string | number }>;
+          };
+        };
+      };
+    };
+
+    const cb = body?.Body?.stkCallback;
+    if (!cb) { ack(); return; }
+
+    const { ResultCode, ResultDesc, CheckoutRequestID, CallbackMetadata } = cb;
+
+    // ── Step 1: only act on payments Safaricom reports as successful ─────────
+    if (ResultCode !== 0) {
+      console.warn(`[M-Pesa callback] Payment not successful: ${ResultDesc} (${CheckoutRequestID})`);
+      ack();
+      return;
+    }
+
+    if (!CheckoutRequestID) {
+      console.error("[M-Pesa callback] ResultCode 0 but no CheckoutRequestID — cannot process");
+      ack();
+      return;
+    }
+
+    // ── Step 2: Daraja verification — reject unrecognized / forged callbacks ─
+    const darajaResult = await verifyMpesaPaymentOnDaraja(CheckoutRequestID);
+
+    if (darajaResult === "rejected") {
+      // Daraja does not recognise this reference as a successful payment.
+      // This is the expected response for a forged or replayed callback.
+      console.warn(
+        `[M-Pesa callback] Daraja verification rejected ref ${CheckoutRequestID} — callback not actioned`
+      );
+      ack();
+      return;
+    }
+
+    // ── Step 3: extract metadata items (amount, receipt, phone) ──────────────
+    const metaItems = CallbackMetadata?.Item ?? [];
+    const getMeta = (name: string) => metaItems.find((i) => i.Name === name)?.Value;
+    const paidAmount = Number(getMeta("Amount") ?? 0);
+    const receiptNum = String(getMeta("MpesaReceiptNumber") ?? "");
+    const phoneMeta  = getMeta("PhoneNumber");
+    const phone      = phoneMeta ? String(phoneMeta) : "";
+
+    // Use CheckoutRequestID as the payment reference — it is the same value the
+    // client stores when it creates the pending order after initiating the STK push.
+    const paymentReference = CheckoutRequestID;
+
+    // ── Step 4: idempotency — look up existing order ─────────────────────────
+    const existing = await db
+      .select()
+      .from(ucOrdersTable)
+      .where(eq(ucOrdersTable.paymentReference, paymentReference))
+      .limit(1);
+
+    // ── Step 5: Daraja unavailable — store unverified record; do NOT fulfil ──
+    // Safaricom sent a ResultCode 0 but we cannot independently confirm it.
+    // Creating a "processing" order here would allow an attacker to trigger
+    // fulfilment during any Daraja outage by posting a forged callback.
+    // Instead we persist a "pending" (non-fulfillable) record and alert the team
+    // to verify manually — this preserves the payment data without fraud risk.
+    if (darajaResult === "unavailable") {
+      console.warn(
+        `[M-Pesa callback] Daraja verification unavailable for ref ${CheckoutRequestID} — storing as unverified, manual verification required`
+      );
+
+      if (existing.length > 0) {
+        // An order already exists.  Leave it in its current state — do NOT
+        // advance it to "processing" without Daraja confirmation.
+        const order = existing[0]!;
+        console.warn(
+          `[M-Pesa callback] Existing order ${order.id} (status=${order.status}) left unchanged — Daraja unavailable`
+        );
+        ack({ orderId: order.id, unverified: true });
+        return;
+      }
+
+      // No existing order — require an initiation record to prove we sent this push.
+      const initiationRow = await db
+        .select()
+        .from(mpesaStkInitiationsTable)
+        .where(eq(mpesaStkInitiationsTable.checkoutRequestId, paymentReference))
+        .limit(1);
+
+      if (initiationRow.length === 0 || initiationRow[0]!.expiresAt < new Date()) {
+        // This CheckoutRequestID was not initiated by our server, or the
+        // validity window has passed.  Reject without creating any record.
+        console.warn(
+          `[M-Pesa callback] (unavailable) No valid initiation record for ref ${paymentReference} — rejecting`
+        );
+        ack();
+        return;
+      }
+
+      const initiation = initiationRow[0]!;
+      // Use our stored expected values, not the unauthenticated callback metadata.
+      const verifiedAmount = initiation.expectedAmount;
+      const verifiedPhone  = initiation.phone;
+
+      // Persist with "pending" status so it is visible to the team but cannot
+      // be dispatched without an explicit manual upgrade.
+      const [unverified] = await db
+        .insert(ucOrdersTable)
+        .values({
+          userId:           verifiedPhone || "mpesa-unverified-callback",
+          status:           "pending",          // NOT "processing" — must be verified first
+          total:            String(verifiedAmount),
+          currency:         "KES",
+          paymentMethod:    "mpesa",
+          paymentReference: paymentReference,
+          promoCode:        "",
+          discountPercent:  0,
+          discountAmount:   0,
+          shippingAddress:  {},
+          webhookRecovery:  true,
+        })
+        .returning();
+
+      console.warn(
+        `[M-Pesa callback] Unverified order ${unverified!.id} stored as pending — ref=${paymentReference} amount=KES ${verifiedAmount} phone=${verifiedPhone}`
+      );
+
+      // Alert team that VERIFICATION IS REQUIRED before fulfilling.
+      sendViaResend({
+        from:    "Ultra Clear App <noreply@contacts.ucfilters.com>",
+        to:      "info@ucfilters.com",
+        subject: `🔍 Unverified M-Pesa callback #${unverified!.id} — VERIFY BEFORE FULFILLING`,
+        text: [
+          "An M-Pesa callback was received but Daraja verification was unavailable.",
+          "This order is stored as PENDING and must NOT be fulfilled until manually verified.",
+          "",
+          `Order ID:       ${unverified!.id}`,
+          `Checkout Ref:   ${paymentReference}`,
+          `Amount:         KES ${verifiedAmount.toLocaleString()} (from our initiation record)`,
+          `Phone:          ${verifiedPhone}`,
+          "",
+          "Required action BEFORE fulfilling:",
+          "  1. Log into M-Pesa Business (pay.pesaflow.com / Business Mgr) and confirm",
+          `     that a payment matching ${paymentReference} was actually received.`,
+          "  2. If confirmed: update the order status to 'processing' and proceed.",
+          "  3. If not confirmed: delete this order — it may be a forged callback.",
+          "",
+          "This order is flagged as 'Webhook recovery' in the orders list.",
+          "Status: PENDING (not fulfilled until verified).",
+        ].join("\n"),
+      }).catch(() => { /* already logged inside sendViaResend */ });
+
+      ack({ orderId: unverified!.id, recovered: true, unverified: true });
+      return;
+    }
+
+    // ── darajaResult === "confirmed" from here ────────────────────────────────
+    console.info(
+      `[M-Pesa callback] Daraja confirmed payment — ref=${CheckoutRequestID} amount=${paidAmount} receipt=${receiptNum}`
+    );
+
+    if (existing.length > 0) {
+      const order = existing[0]!;
+
+      // Atomic transition: only the request that wins the WHERE status='pending'
+      // guard sends the customer email.  Concurrent callbacks both read the row
+      // but only one UPDATE affects it; the other gets 0 rows back and is a no-op.
+      const advanced = await db
+        .update(ucOrdersTable)
+        .set({ status: "processing" })
+        .where(and(eq(ucOrdersTable.id, order.id), eq(ucOrdersTable.status, "pending")))
+        .returning();
+
+      if (advanced.length > 0) {
+        // We won the race — app closed during the wait, polling stopped.
+        console.info(
+          `[M-Pesa callback] Order ${order.id} (ref ${paymentReference}) advanced to processing`
+        );
+
+        // Send customer confirmation email when we have an email address.
+        // userId is set to the customer's email when the app creates the order.
+        const customerEmail = order.userId?.includes("@") ? order.userId : null;
+        if (customerEmail) {
+          const shippingAddr = (order.shippingAddress ?? {}) as Record<string, string>;
+          const firstName = shippingAddr["firstName"] ?? "Customer";
+          const receipt = buildOrderReceiptEmail({
+            orderId:         String(order.id),
+            firstName,
+            email:           customerEmail,
+            // Use a single summary line: individual items live in ucOrderItemsTable.
+            lineItems:       [{ name: "M-Pesa Payment", quantity: 1, total: String(order.total) }],
+            total:           String(order.total),
+            currency:        order.currency,
+            paymentMethod:   "mpesa",
+            shippingAddress: shippingAddr,
+            discountAmount:  order.discountAmount,
+            promoCode:       order.promoCode ?? undefined,
+          });
+          sendViaResend({
+            from:    "Ultra Clear App <noreply@contacts.ucfilters.com>",
+            to:      customerEmail,
+            subject: receipt.subject,
+            html:    receipt.html,
+            text:    receipt.text,
+          }).catch(() => { /* already logged inside sendViaResend */ });
+        }
+
+        ack({ orderId: order.id });
+      } else {
+        // UPDATE matched 0 rows — another concurrent callback or polling loop
+        // already advanced this order.  Safe no-op.
+        console.info(
+          `[M-Pesa callback] Duplicate callback for ref ${paymentReference} — order ${order.id} already ${order.status}`
+        );
+        ack({ orderId: order.id });
+      }
+
+      return;
+    }
+
+    // ── Step 6: Daraja confirmed, no existing order — verify initiation + recover ─
+    // Require an initiation record to prove we sent this push and to obtain the
+    // canonical amount.  Without it any party with a valid CheckoutRequestID
+    // (for any payment to our shortcode) could trigger recovery order creation.
+    const initiationForRecovery = await db
+      .select()
+      .from(mpesaStkInitiationsTable)
+      .where(eq(mpesaStkInitiationsTable.checkoutRequestId, paymentReference))
+      .limit(1);
+
+    if (initiationForRecovery.length === 0 || initiationForRecovery[0]!.expiresAt < new Date()) {
+      console.warn(
+        `[M-Pesa callback] (confirmed) No valid initiation record for ref ${paymentReference} — rejecting recovery creation`
+      );
+      ack();
+      return;
+    }
+
+    const recoveryInitiation = initiationForRecovery[0]!;
+    // Use our stored expected values — never the unauthenticated callback metadata.
+    const recoveryAmount = recoveryInitiation.expectedAmount;
+    const recoveryPhone  = recoveryInitiation.phone;
+
+    if (Math.abs(paidAmount - recoveryAmount) > 1) {
+      // Amount in callback differs from what we initiated — log for reconciliation
+      // but proceed with our stored amount (the authoritative value).
+      console.warn(
+        `[M-Pesa callback] Amount mismatch ref=${paymentReference}: initiated=${recoveryAmount} callback=${paidAmount} — using initiated amount`
+      );
+    }
+
+    const [recovered] = await db
+      .insert(ucOrdersTable)
+      .values({
+        userId:           recoveryPhone || "mpesa-webhook-recovery",
+        status:           "processing",
+        total:            String(recoveryAmount),
+        currency:         "KES",
+        paymentMethod:    "mpesa",
+        paymentReference: paymentReference,
+        promoCode:        "",
+        discountPercent:  0,
+        discountAmount:   0,
+        shippingAddress:  {},
+        webhookRecovery:  true,
+      })
+      .returning();
+
+    console.info(
+      `[M-Pesa callback] Recovery order ${recovered!.id} created — ref=${paymentReference} receipt=${receiptNum} amount=KES ${recoveryAmount} phone=${recoveryPhone}`
+    );
+
+    // Alert the team (fire-and-forget — must never block the ack response).
+    sendViaResend({
+      from:    "Ultra Clear App <noreply@contacts.ucfilters.com>",
+      to:      "info@ucfilters.com",
+      subject: `⚠️ M-Pesa webhook recovery order #${recovered!.id} needs fulfilment`,
+      text: [
+        "An M-Pesa webhook recovery order was created automatically.",
+        "Payment independently verified with Daraja and matched to our STK initiation — safe to fulfil.",
+        "The customer paid but the app closed before the order was recorded.",
+        "",
+        `Order ID:       ${recovered!.id}`,
+        `Checkout Ref:   ${paymentReference}`,
+        `M-Pesa Receipt: ${receiptNum || "(not provided)"}`,
+        `Amount:         KES ${recoveryAmount.toLocaleString()} (from our initiation record)`,
+        `Phone:          ${recoveryPhone}`,
+        "",
+        "Action required:",
+        "  1. Contact the customer and confirm their delivery address and items.",
+        "  2. Update the order with the correct line items.",
+        "  3. Dispatch as normal once complete.",
+        "",
+        "This order is flagged as 'Webhook recovery' in the orders list.",
+      ].join("\n"),
+    }).catch(() => { /* already logged inside sendViaResend */ });
+
+    ack({ orderId: recovered!.id, recovered: true });
+  } catch (err) {
+    // ── Unique-constraint violation: two concurrent callbacks raced to insert ─
+    if (
+      typeof err === "object" && err !== null &&
+      "code" in err && (err as { code: string }).code === "23505"
+    ) {
+      console.info("[M-Pesa callback] Concurrent duplicate — unique constraint hit, recovery order already exists");
+      ack();
+      return;
+    }
+    console.error("[M-Pesa callback] Unexpected error:", err);
+    // Still ack — returning an error status causes Safaricom to retry with
+    // unpredictable timing, which can create duplicate recovery orders.
+    ack();
+  }
 });
 
 // ─── Generic verify ───────────────────────────────────────────────────────────
