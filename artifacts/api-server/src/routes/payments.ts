@@ -99,7 +99,7 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
       customerMessage: stkData["CustomerMessage"],
     });
   } catch {
-    res.status(500).json({ error: "M-Pesa request failed" });
+    res.status(500).json({ error: "M-Pesa request failed", retryable: true });
   }
 });
 
@@ -194,7 +194,7 @@ router.post(
       });
       res.json({ sessionId: session.id, sessionUrl: session.url, amount });
     } catch (e: unknown) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: (e as Error).message, retryable: true });
     }
   }
 );

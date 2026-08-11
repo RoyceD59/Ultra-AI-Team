@@ -101,7 +101,18 @@ export default function CheckoutScreen() {
           clearInterval(pollRef.current!);
           setMpesaWaiting(false);
           setProcessing(false);
-          Alert.alert('Timed out', 'M-Pesa confirmation timed out. Please try again.');
+          Alert.alert(
+            'M-Pesa Timed Out',
+            'M-Pesa confirmation timed out. You can try again or place your order with Cash on Delivery.',
+            [
+              { text: 'Try again', onPress: () => setShowMpesaModal(true) },
+              {
+                text: 'Pay with COD instead',
+                onPress: () => setPaymentMethod('cod'),
+                style: 'cancel',
+              },
+            ],
+          );
           return;
         }
         try {
@@ -119,7 +130,18 @@ export default function CheckoutScreen() {
       }, 3000);
     } catch {
       setProcessing(false);
-      Alert.alert('Error', 'Failed to send M-Pesa request.');
+      Alert.alert(
+        'M-Pesa Unavailable',
+        'Failed to send the M-Pesa request. You can try again or place your order with Cash on Delivery.',
+        [
+          { text: 'Try again', onPress: () => handleMpesa() },
+          {
+            text: 'Pay with COD instead',
+            onPress: () => { setShowMpesaModal(false); setPaymentMethod('cod'); },
+            style: 'cancel',
+          },
+        ],
+      );
     }
   }
 
@@ -143,9 +165,20 @@ export default function CheckoutScreen() {
         // Server returns 402 if Stripe session is not paid — surface that to the user
         Alert.alert('Payment not confirmed', (e as Error).message ?? 'Stripe payment was not completed. No order was created.');
       }
-    } catch (e) {
+    } catch {
       setProcessing(false);
-      Alert.alert('Error', (e as Error).message ?? 'Stripe checkout could not be opened.');
+      Alert.alert(
+        'Stripe Unavailable',
+        'Stripe checkout could not be opened. You can try again or place your order with Cash on Delivery.',
+        [
+          { text: 'Try again', onPress: () => handleStripeCheckout() },
+          {
+            text: 'Pay with COD instead',
+            onPress: () => setPaymentMethod('cod'),
+            style: 'cancel',
+          },
+        ],
+      );
     }
   }
 
