@@ -15,7 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  ShoppingBag, AlertTriangle, Package, RefreshCw, Lock, AlertCircle, LogOut,
+  ShoppingBag, AlertTriangle, Package, RefreshCw, Lock, AlertCircle,
+  LogOut, Copy, Check, ExternalLink,
 } from "lucide-react";
 import { formatRelativeDate } from "@/components/shared/badges";
 
@@ -144,6 +145,124 @@ function paymentMethodLabel(method: string) {
   return method;
 }
 
+/** True when the userId string looks like an email address. */
+function isEmail(s: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+/** Copy-to-clipboard button with tick confirmation. */
+function CopyButton({ value, label }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard not available — silently ignore
+    }
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={`Copy ${label ?? value}`}
+      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {copied
+        ? <Check className="w-3 h-3 text-emerald-600" />
+        : <Copy className="w-3 h-3" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+// ─── Order card ───────────────────────────────────────────────────────────────
+
+function OrderCard({ order }: { order: AdminOrder }) {
+  const isRecovery   = order.webhookRecovery;
+  const hasReference = !!order.paymentReference;
+  const customerIsEmail = isEmail(order.userId);
+
+  return (
+    <Card className={isRecovery ? "border-amber-400" : ""}>
+      <CardHeader className="pb-2 pt-4 px-5">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-base font-semibold">Order #{order.id}</span>
+            {/* Webhook recovery badge — persisted flag, never derived from heuristics */}
+            {isRecovery && (
+              <Badge className="bg-amber-500 text-white hover:bg-amber-600 gap-1 text-xs font-medium">
+                <AlertTriangle className="w-3 h-3" />
+                Webhook recovery
+              </Badge>
+            )}
+            <Badge className={`text-xs font-medium capitalize ${statusColor(order.status)}`}>
+              {order.status}
+            </Badge>
+          </div>
+          <span className="text-muted-foreground text-xs">
+            {formatRelativeDate(order.dateCreated)}
+          </span>
+        </div>
+
+        {/* Customer row */}
+        <p className="text-xs text-muted-foreground mt-1">
+          {customerIsEmail ? "Customer email" : "Customer"}:{" "}
+          <span className="font-mono">{order.userId}</span>
+          {" · "}{paymentMethodLabel(order.paymentMethod)}
+        </p>
+
+        {/* Paystack reference — own row so it's easy to spot and copy */}
+        {hasReference && (
+          <div className={`flex items-center gap-2 mt-1.5 flex-wrap ${
+            isRecovery ? "rounded-md bg-amber-50 border border-amber-200 px-2 py-1.5" : ""
+          }`}>
+            <span className="text-xs text-muted-foreground">
+              {paymentMethodLabel(order.paymentMethod)} ref:
+            </span>
+            <span className="font-mono text-xs font-medium">{order.paymentReference}</span>
+            <CopyButton value={order.paymentReference} label="reference" />
+            {order.paymentMethod === "paystack" && (
+              <a
+                href={`https://dashboard.paystack.com/#/transactions?reference=${encodeURIComponent(order.paymentReference)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Open in Paystack
+              </a>
+            )}
+          </div>
+        )}
+      </CardHeader>
+
+      <CardContent className="px-5 pb-4">
+        {order.lineItems.length === 0 ? (
+          <p className="text-muted-foreground text-sm italic flex items-center gap-1.5">
+            <Package className="w-4 h-4" />
+            No line items — enrichment required before dispatch
+          </p>
+        ) : (
+          <ul className="space-y-0.5">
+            {order.lineItems.map((item, i) => (
+              <li key={i} className="text-sm flex justify-between">
+                <span>{item.name} × {item.quantity}</span>
+                <span className="text-muted-foreground">{order.currency} {item.total}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="mt-2 text-sm font-semibold text-right">
+          Total: {order.currency} {order.total}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Orders list ──────────────────────────────────────────────────────────────
 
 function OrdersList({ token, onLogout }: { token: string; onLogout: () => void }) {
@@ -200,8 +319,8 @@ function OrdersList({ token, onLogout }: { token: string; onLogout: () => void }
             </p>
             <p className="text-amber-700 text-sm mt-0.5">
               These orders were created automatically because the customer paid but the app lost
-              connectivity. Contact the customer, confirm the items and address, then dispatch
-              before marking complete.
+              connectivity. Use the Paystack reference to verify payment, then contact the customer
+              to confirm items and address before dispatch.
             </p>
           </div>
         </div>
@@ -224,55 +343,7 @@ function OrdersList({ token, onLogout }: { token: string; onLogout: () => void }
       {orders && orders.length > 0 && (
         <div className="space-y-3">
           {orders.map(order => (
-            <Card key={order.id} className={order.webhookRecovery ? "border-amber-400" : ""}>
-              <CardHeader className="pb-2 pt-4 px-5">
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-base font-semibold">Order #{order.id}</span>
-                    {/* Webhook recovery badge — persisted flag, never a heuristic */}
-                    {order.webhookRecovery && (
-                      <Badge className="bg-amber-500 text-white hover:bg-amber-600 gap-1 text-xs font-medium">
-                        <AlertTriangle className="w-3 h-3" />
-                        Webhook recovery
-                      </Badge>
-                    )}
-                    <Badge className={`text-xs font-medium capitalize ${statusColor(order.status)}`}>
-                      {order.status}
-                    </Badge>
-                  </div>
-                  <span className="text-muted-foreground text-xs">
-                    {formatRelativeDate(order.dateCreated)}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Customer: <span className="font-mono">{order.userId}</span>
-                  {order.paymentReference && (
-                    <> · Ref: <span className="font-mono">{order.paymentReference}</span></>
-                  )}
-                  {" · "}{paymentMethodLabel(order.paymentMethod)}
-                </p>
-              </CardHeader>
-              <CardContent className="px-5 pb-4">
-                {order.lineItems.length === 0 ? (
-                  <p className="text-muted-foreground text-sm italic flex items-center gap-1.5">
-                    <Package className="w-4 h-4" />
-                    No line items — enrichment required before dispatch
-                  </p>
-                ) : (
-                  <ul className="space-y-0.5">
-                    {order.lineItems.map((item, i) => (
-                      <li key={i} className="text-sm flex justify-between">
-                        <span>{item.name} × {item.quantity}</span>
-                        <span className="text-muted-foreground">{order.currency} {item.total}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div className="mt-2 text-sm font-semibold text-right">
-                  Total: {order.currency} {order.total}
-                </div>
-              </CardContent>
-            </Card>
+            <OrderCard key={order.id} order={order} />
           ))}
         </div>
       )}
