@@ -1540,7 +1540,18 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
               paymentMethod:   String(normalized["paymentMethod"] ?? ""),
               shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
             });
-            sendEmail({ to: contact.email, ...receipt });
+            sendViaResend({
+              from:    "orders@contacts.ucfilters.com",
+              to:      contact.email,
+              subject: receipt.subject,
+              text:    receipt.text,
+              html:    receipt.html,
+            }).then(ok => {
+              if (!ok) {
+                logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
+                sendEmail({ to: contact.email, ...receipt });
+              }
+            });
           }
         }).catch(() => {});
         res.json(normalized);
@@ -1626,7 +1637,18 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           discountAmount:  newOrder.discountAmount,
           promoCode:       newOrder.promoCode,
         });
-        sendEmail({ to: contact.email, ...receipt });
+        sendViaResend({
+          from:    "orders@contacts.ucfilters.com",
+          to:      contact.email,
+          subject: receipt.subject,
+          text:    receipt.text,
+          html:    receipt.html,
+        }).then(ok => {
+          if (!ok) {
+            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
+            sendEmail({ to: contact.email, ...receipt });
+          }
+        });
       }
     }).catch(() => {});
 
@@ -1683,7 +1705,18 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           discountAmount:  fallbackOrder.discountAmount,
           promoCode:       fallbackOrder.promoCode,
         });
-        sendEmail({ to: contact.email, ...receipt });
+        sendViaResend({
+          from:    "orders@contacts.ucfilters.com",
+          to:      contact.email,
+          subject: receipt.subject,
+          text:    receipt.text,
+          html:    receipt.html,
+        }).then(ok => {
+          if (!ok) {
+            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
+            sendEmail({ to: contact.email, ...receipt });
+          }
+        });
       }
     }).catch(() => {});
     res.json(fallbackOrder);

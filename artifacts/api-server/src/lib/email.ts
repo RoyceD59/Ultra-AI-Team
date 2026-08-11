@@ -389,6 +389,9 @@ export function buildOrderReceiptEmail(params: {
               </tbody>
             </table>
 
+            <p style="margin:0 0 16px;color:#0D4FA8;font-size:14px;font-weight:600;background:#eff6ff;border-left:3px solid #0D4FA8;padding:12px 16px;border-radius:4px;">
+              📦 We'll notify you as soon as your order has shipped.
+            </p>
             <p style="margin:0 0 24px;color:#6b7280;font-size:13px;line-height:1.6;">
               Questions about your order? Contact us at
               <a href="mailto:support@ucfilters.co.ke" style="color:#0D4FA8;">support@ucfilters.co.ke</a>
@@ -426,6 +429,8 @@ export function buildOrderReceiptEmail(params: {
       ? [`  Discount${promoCode ? ` (${promoCode})` : ""}: -${fmt(discountAmount)}`]
       : []),
     `  Total: ${fmt(total)}`,
+    "",
+    "We'll notify you as soon as your order has shipped.",
     "",
     "Questions? Email support@ucfilters.co.ke or call 0717774049.",
     "ucfilters.co.ke",

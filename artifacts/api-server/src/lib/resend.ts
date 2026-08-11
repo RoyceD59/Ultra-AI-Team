@@ -18,6 +18,7 @@ export interface ResendEmail {
   to: string;
   subject: string;
   text: string;
+  html?: string;
 }
 
 export async function sendViaResend(email: ResendEmail): Promise<boolean> {
