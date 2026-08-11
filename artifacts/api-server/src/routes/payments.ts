@@ -83,7 +83,7 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
           PartyA: phone.replace(/^0/, "254"),
           PartyB: shortcode,
           PhoneNumber: phone.replace(/^0/, "254"),
-          CallBackURL: `${process.env["WC_BASE_URL"] || "https://www.ucfilters.com"}/api/mpesa/callback`,
+          CallBackURL: `${process.env["API_BASE_URL"] || "https://team-horizon--jerryaroyce.replit.app"}/api/payments/mpesa/callback`,
           AccountReference: `Order-${orderId}`,
           TransactionDesc: "UC Filter Purchase",
         }),
