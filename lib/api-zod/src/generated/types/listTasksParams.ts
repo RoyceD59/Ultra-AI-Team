@@ -11,4 +11,5 @@ export type ListTasksParams = {
 projectId?: number;
 assigneeId?: number;
 status?: TaskStatus;
+sourcePlatform?: string;
 };

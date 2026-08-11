@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
 import { db, contactsTable, contactMethodsTable } from "@workspace/db";
+import { requireTeamAuth } from "./auth.js";
 import {
   CreateContactBody,
   CreateContactResponse,
@@ -26,7 +27,7 @@ const router: IRouter = Router();
 
 // ─── Contacts ────────────────────────────────────────────────────────────────
 
-router.get("/contacts", async (_req, res): Promise<void> => {
+router.get("/contacts", requireTeamAuth, async (_req, res): Promise<void> => {
   const contacts = await db
     .select()
     .from(contactsTable)
@@ -34,7 +35,7 @@ router.get("/contacts", async (_req, res): Promise<void> => {
   res.json(ListContactsResponse.parse(contacts));
 });
 
-router.post("/contacts", async (req, res): Promise<void> => {
+router.post("/contacts", requireTeamAuth, async (req, res): Promise<void> => {
   const parsed = CreateContactBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -54,7 +55,7 @@ router.post("/contacts", async (req, res): Promise<void> => {
   res.status(201).json(CreateContactResponse.parse(contact));
 });
 
-router.get("/contacts/:id", async (req, res): Promise<void> => {
+router.get("/contacts/:id", requireTeamAuth, async (req, res): Promise<void> => {
   const params = GetContactParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -80,7 +81,7 @@ router.get("/contacts/:id", async (req, res): Promise<void> => {
   res.json(GetContactResponse.parse({ ...contact, methods }));
 });
 
-router.patch("/contacts/:id", async (req, res): Promise<void> => {
+router.patch("/contacts/:id", requireTeamAuth, async (req, res): Promise<void> => {
   const params = UpdateContactParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -107,7 +108,7 @@ router.patch("/contacts/:id", async (req, res): Promise<void> => {
   res.json(UpdateContactResponse.parse(contact));
 });
 
-router.delete("/contacts/:id", async (req, res): Promise<void> => {
+router.delete("/contacts/:id", requireTeamAuth, async (req, res): Promise<void> => {
   const params = DeleteContactParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -160,7 +161,7 @@ function parseImportBody(body: unknown): { rows: ImportRow[] } | null {
   return { rows };
 }
 
-router.post("/contacts/import", async (req, res): Promise<void> => {
+router.post("/contacts/import", requireTeamAuth, async (req, res): Promise<void> => {
   const parsed = parseImportBody(req.body);
   if (!parsed) {
     res.status(400).json({ error: "Invalid import body: expected { rows: ImportRow[] }" });
@@ -263,7 +264,7 @@ router.post("/contacts/import", async (req, res): Promise<void> => {
 
 // ─── Contact Methods ──────────────────────────────────────────────────────────
 
-router.get("/contacts/:id/methods", async (req, res): Promise<void> => {
+router.get("/contacts/:id/methods", requireTeamAuth, async (req, res): Promise<void> => {
   const params = ListContactMethodsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -279,7 +280,7 @@ router.get("/contacts/:id/methods", async (req, res): Promise<void> => {
   res.json(ListContactMethodsResponse.parse(methods));
 });
 
-router.post("/contacts/:id/methods", async (req, res): Promise<void> => {
+router.post("/contacts/:id/methods", requireTeamAuth, async (req, res): Promise<void> => {
   const params = AddContactMethodParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -317,6 +318,7 @@ router.post("/contacts/:id/methods", async (req, res): Promise<void> => {
 
 router.patch(
   "/contacts/:id/methods/:methodId",
+  requireTeamAuth,
   async (req, res): Promise<void> => {
     const params = UpdateContactMethodParams.safeParse(req.params);
     if (!params.success) {
@@ -347,6 +349,7 @@ router.patch(
 
 router.delete(
   "/contacts/:id/methods/:methodId",
+  requireTeamAuth,
   async (req, res): Promise<void> => {
     const params = DeleteContactMethodParams.safeParse(req.params);
     if (!params.success) {

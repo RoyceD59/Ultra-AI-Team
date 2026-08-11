@@ -35,6 +35,9 @@ export const ListMembersResponse = zod.array(ListMembersResponseItem)
  */
 
 
+
+
+
 export const CreateMemberBody = zod.object({
   "name": zod.string().min(1),
   "email": zod.string().min(1),
@@ -72,6 +75,10 @@ export const GetMemberResponse = zod.object({
 export const UpdateMemberParams = zod.object({
   "id": zod.coerce.number()
 })
+
+
+
+
 
 
 export const UpdateMemberBody = zod.object({
@@ -122,6 +129,7 @@ export const ListProjectsResponse = zod.array(ListProjectsResponseItem)
  */
 
 
+
 export const CreateProjectBody = zod.object({
   "name": zod.string().min(1),
   "description": zod.string(),
@@ -162,6 +170,8 @@ export const GetProjectResponse = zod.object({
 export const UpdateProjectParams = zod.object({
   "id": zod.coerce.number()
 })
+
+
 
 
 export const UpdateProjectBody = zod.object({
@@ -242,6 +252,7 @@ export const ListTasksResponse = zod.array(ListTasksResponseItem)
  */
 
 
+
 export const CreateTaskBody = zod.object({
   "projectId": zod.number(),
   "title": zod.string().min(1),
@@ -305,6 +316,8 @@ export const GetTaskResponse = zod.object({
 export const UpdateTaskParams = zod.object({
   "id": zod.coerce.number()
 })
+
+
 
 
 export const UpdateTaskBody = zod.object({
@@ -475,6 +488,7 @@ export const SendAnthropicMessageResponse = zod.unknown()
  */
 
 
+
 export const AiQueryBody = zod.object({
   "question": zod.string().min(1),
   "source": zod.string().optional().describe('Identifier of the calling agent (e.g. \"orchestrator\", \"analytics-agent\")')
@@ -539,6 +553,7 @@ export const ListContactsResponse = zod.array(ListContactsResponseItem)
  */
 
 
+
 export const CreateContactBody = zod.object({
   "fullName": zod.string().min(1),
   "role": zod.string().optional(),
@@ -588,6 +603,8 @@ export const GetContactResponse = zod.object({
 export const UpdateContactParams = zod.object({
   "id": zod.coerce.number()
 })
+
+
 
 
 export const UpdateContactBody = zod.object({
@@ -643,6 +660,9 @@ export const AddContactMethodParams = zod.object({
 })
 
 
+
+
+
 export const AddContactMethodBody = zod.object({
   "channelType": zod.string().min(1),
   "channelValue": zod.string().min(1),
@@ -666,6 +686,9 @@ export const UpdateContactMethodParams = zod.object({
   "id": zod.coerce.number(),
   "methodId": zod.coerce.number()
 })
+
+
+
 
 
 export const UpdateContactMethodBody = zod.object({
@@ -713,6 +736,7 @@ export const ListSystemStatusResponse = zod.array(ListSystemStatusResponseItem)
 /**
  * @summary Register a new platform to monitor
  */
+
 
 
 export const CreateSystemStatusBody = zod.object({
@@ -820,12 +844,34 @@ export const DispatchNotificationResponse = zod.object({
 
 
 /**
+ * Verifies the current passcode (checking the DB-stored bcrypt hash first,
+ * then falling back to SESSION_SECRET) and stores a bcrypt hash of the new
+ * passcode in team_settings.  Requires a valid team-session Bearer token.
+ * @summary Change the team passcode
+ */
+
+export const changePasscodeBodyNewPasscodeMin = 8;
+
+
+
+export const ChangePasscodeBody = zod.object({
+  "currentPasscode": zod.string().min(1).describe('The current team passcode (used to verify identity)'),
+  "newPasscode": zod.string().min(changePasscodeBodyNewPasscodeMin).describe('The new passcode (minimum 8 characters)')
+})
+
+export const ChangePasscodeResponse = zod.object({
+  "ok": zod.boolean()
+})
+
+
+/**
  * Validates the passcode against SESSION_SECRET and issues a short-lived
  * JWT with type "team-session".  Required before calling any WhatsApp
  * management or send routes.  Returns 503 if SESSION_SECRET is not
  * configured on the server.
  * @summary Exchange the team passcode for a signed team-session JWT
  */
+
 
 
 export const IssueTeamTokenBody = zod.object({
@@ -869,6 +915,8 @@ export const DisconnectWhatsAppResponse = zod.object({
  */
 
 
+
+
 export const SendWhatsAppQuickMessageBody = zod.object({
   "to": zod.string().min(1).describe('Recipient phone number (e.g. +254712345678)'),
   "message": zod.string().min(1).describe('Plain-text message body')
@@ -907,4 +955,5 @@ export const IngestWebhookResponse = zod.object({
   "message": zod.string(),
   "validationErrors": zod.array(zod.string()).optional()
 })
+
 

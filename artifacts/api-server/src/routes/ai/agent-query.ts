@@ -7,7 +7,6 @@
  * the shared PROJECTHUB_WEBHOOK_SECRET bearer token.
  */
 import { Router, type IRouter } from "express";
-
 const router: IRouter = Router();
 
 const TEAM_HORIZON_URL = "https://team-horizon--jerryaroyce.replit.app";

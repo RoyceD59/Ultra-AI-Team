@@ -14,10 +14,9 @@ const ALG_HEADER = Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64ur
 function secret(): string {
   const s = process.env["SESSION_SECRET"];
   if (!s) {
-    // Warn once; in production the secret must be set.
-    console.warn("[jwt] SESSION_SECRET is not set — using insecure fallback");
+    throw new Error("[jwt] SESSION_SECRET is not set — cannot sign or verify tokens");
   }
-  return s ?? "dev-insecure-fallback-change-in-production";
+  return s;
 }
 
 function sign(headerDotBody: string): string {
@@ -45,7 +44,7 @@ export interface JwtClaims {
 /**
  * Verify a Bearer JWT issued by this server.
  * Returns the decoded claims on success, or null if the signature is invalid,
- * the token is malformed, or the algorithm is `none`.
+ * the token is malformed, the algorithm is `none`, or the token has expired.
  */
 export function verifyToken(authHeader: string | undefined): JwtClaims | null {
   if (!authHeader?.startsWith("Bearer ")) return null;
@@ -63,7 +62,14 @@ export function verifyToken(authHeader: string | undefined): JwtClaims | null {
     return null;
   }
 
-  const expected = sign(`${header}.${body}`);
+  let expected: string;
+  try {
+    expected = sign(`${header}.${body}`);
+  } catch {
+    // SESSION_SECRET not set — cannot verify
+    return null;
+  }
+
   // Use timing-safe comparison to prevent timing attacks
   try {
     const a = Buffer.from(expected, "base64url");
@@ -74,7 +80,14 @@ export function verifyToken(authHeader: string | undefined): JwtClaims | null {
   }
 
   try {
-    return JSON.parse(Buffer.from(body, "base64url").toString()) as JwtClaims;
+    const claims = JSON.parse(Buffer.from(body, "base64url").toString()) as JwtClaims;
+
+    // Enforce expiry claim: reject tokens past their exp timestamp
+    if (claims.exp !== undefined && claims.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+
+    return claims;
   } catch {
     return null;
   }

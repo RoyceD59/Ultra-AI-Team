@@ -31,6 +31,8 @@ import type {
   AnthropicError,
   AnthropicMessage,
   AnthropicMessageInput,
+  ChangePasscodeInput,
+  ChangePasscodeResult,
   Contact,
   ContactInput,
   ContactMethod,
@@ -3369,6 +3371,80 @@ export const useDispatchNotification = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getDispatchNotificationMutationOptions(options));
+    }
+
+export const getChangePasscodeUrl = () => {
+
+
+
+
+  return `/api/auth/change-passcode`
+}
+
+/**
+ * Verifies the current passcode (checking the DB-stored bcrypt hash first,
+ * then falling back to SESSION_SECRET) and stores a bcrypt hash of the new
+ * passcode in team_settings.  Requires a valid team-session Bearer token.
+ * @summary Change the team passcode
+ */
+export const changePasscode = async (changePasscodeInput: ChangePasscodeInput, options?: RequestInit): Promise<ChangePasscodeResult> => {
+
+  return customFetch<ChangePasscodeResult>(getChangePasscodeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(changePasscodeInput)
+  }
+);}
+
+
+
+
+
+export const getChangePasscodeMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof changePasscode>>, TError,{data: BodyType<ChangePasscodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof changePasscode>>, TError,{data: BodyType<ChangePasscodeInput>}, TContext> => {
+
+const mutationKey = ['changePasscode'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof changePasscode>>, {data: BodyType<ChangePasscodeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  changePasscode(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ChangePasscodeMutationResult = NonNullable<Awaited<ReturnType<typeof changePasscode>>>
+    export type ChangePasscodeMutationBody = BodyType<ChangePasscodeInput>
+    export type ChangePasscodeMutationError = ErrorType<void>
+
+    /**
+ * @summary Change the team passcode
+ */
+export const useChangePasscode = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof changePasscode>>, TError,{data: BodyType<ChangePasscodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof changePasscode>>,
+        TError,
+        {data: BodyType<ChangePasscodeInput>},
+        TContext
+      > => {
+      return useMutation(getChangePasscodeMutationOptions(options));
     }
 
 export const getIssueTeamTokenUrl = () => {

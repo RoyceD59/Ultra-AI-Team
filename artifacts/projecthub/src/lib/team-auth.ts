@@ -2,9 +2,8 @@
  * Team authentication utilities for ProjectHub.
  *
  * The ProjectHub frontend must obtain a "team-session" JWT by posting the
- * team passcode (SESSION_SECRET) to POST /api/auth/token.  The token is
- * stored in localStorage and attached as a Bearer header to authenticated
- * requests (currently: all WhatsApp management/send routes).
+ * team passcode to POST /api/auth/token.  The token is stored in localStorage
+ * and attached as a Bearer header to authenticated requests.
  */
 
 const STORAGE_KEY = "projecthub_team_token";
@@ -23,6 +22,11 @@ export function setTeamToken(token: string): void {
 /** Remove the stored token (logout). */
 export function clearTeamToken(): void {
   localStorage.removeItem(STORAGE_KEY);
+}
+
+/** Alias used by sign-out flows; clears the token. */
+export function clearTeamAuth(): void {
+  clearTeamToken();
 }
 
 /**
@@ -56,6 +60,30 @@ export async function loginWithPasscode(passcode: string): Promise<string> {
 }
 
 /**
+ * Change the team passcode.
+ * Verifies the current passcode server-side before storing the new bcrypt hash.
+ * Throws on wrong current passcode or network error.
+ */
+export async function changePasscode(
+  currentPasscode: string,
+  newPasscode: string,
+): Promise<void> {
+  const token = getTeamToken();
+  const res = await fetch(`${BASE}/api/auth/change-passcode`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ currentPasscode, newPasscode }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error ?? `Failed to change passcode (${res.status})`);
+  }
+}
+
+/**
  * Decode the token's exp claim (unix seconds).
  * Uses atob() for browser-safe base64url decoding — no Node.js Buffer required.
  * Returns null if the token is malformed or has no exp.
@@ -84,4 +112,16 @@ export function isTeamAuthenticated(): boolean {
   const exp = tokenExp(token);
   if (exp === null) return true; // no exp claim → treat as valid
   return exp > Math.floor(Date.now() / 1000) + 60;
+}
+
+/**
+ * Called when a 401 is received from the API.
+ * Clears the stored token and dispatches a window event so auth-aware
+ * components (AuthGuard) can redirect to /login.
+ */
+export function handleUnauthorizedResponse(): void {
+  clearTeamToken();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("projecthub:unauthorized"));
+  }
 }

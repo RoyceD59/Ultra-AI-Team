@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
 import { db, systemStatusTable } from "@workspace/db";
+import { requireTeamAuth } from "./auth.js";
 import { logger } from "../lib/logger";
 import {
   CreateSystemStatusBody,
@@ -15,7 +16,7 @@ import {
 
 const router: IRouter = Router();
 
-router.get("/system/status", async (_req, res): Promise<void> => {
+router.get("/system/status", requireTeamAuth, async (_req, res): Promise<void> => {
   const statuses = await db
     .select()
     .from(systemStatusTable)
@@ -42,7 +43,7 @@ router.post("/system/status", async (req, res): Promise<void> => {
   res.status(201).json(CreateSystemStatusResponse.parse(record));
 });
 
-router.patch("/system/status/:id", async (req, res): Promise<void> => {
+router.patch("/system/status/:id", requireTeamAuth, async (req, res): Promise<void> => {
   const params = UpdateSystemStatusParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });

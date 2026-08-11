@@ -22,8 +22,31 @@ import notificationsRouter from "./notifications";
 import systemStatusRouter from "./system-status";
 import webhookRouter from "./webhook";
 import whatsappRouter from "./whatsapp";
+import { requireTeamAuth } from "./auth.js";
 
 const router: IRouter = Router();
+
+// ─── ProjectHub team auth guards ─────────────────────────────────────────────
+// Path-scoped middleware: each entry runs ONLY for requests whose path starts
+// with the given prefix, so UC, webhook, and payment endpoints are unaffected.
+// Using router.use("/prefix", middleware) here (in the MAIN router, with an
+// explicit path) is key — sub-router-level router.use(middleware) (no path)
+// would intercept ALL requests flowing through that router, including paths
+// it doesn't own.
+router.use("/members",      requireTeamAuth);
+router.use("/projects",     requireTeamAuth);
+router.use("/tasks",        requireTeamAuth);
+router.use("/dashboard",    requireTeamAuth);
+router.use("/notifications", requireTeamAuth);
+// /ai/report and /ai/push are team-only; /ai/query is a public UC webhook
+router.use("/ai/report",     requireTeamAuth);
+router.use("/ai/push",       requireTeamAuth);
+router.use("/ai/agent-query", requireTeamAuth);
+router.use("/ai/agents",     requireTeamAuth);
+// Contacts CRUD is protected per-route in contacts.ts (preserves the public
+// Google OAuth callback at /contacts/sync/google/callback in contacts-sync.ts)
+// System status: GET /system/status and PATCH /system/status/:id are protected
+// per-route in system-status.ts; POST routes remain public for the watchdog
 
 router.use(healthRouter);
 router.use(membersRouter);

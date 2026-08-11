@@ -823,6 +823,35 @@ paths:
                 $ref: "#/components/schemas/NotificationDispatchResult"
 
   # ─── Team Auth ───────────────────────────────────────────────────
+  /auth/change-passcode:
+    post:
+      operationId: changePasscode
+      tags: [whatsapp]
+      summary: Change the team passcode
+      description: |
+        Verifies the current passcode (checking the DB-stored bcrypt hash first,
+        then falling back to SESSION_SECRET) and stores a bcrypt hash of the new
+        passcode in team_settings.  Requires a valid team-session Bearer token.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasscodeInput"
+      responses:
+        "200":
+          description: Passcode updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangePasscodeResult"
+        "400":
+          description: Missing or too-short passcode
+        "401":
+          description: Current passcode incorrect or no valid session token
+
   /auth/token:
     post:
       operationId: issueTeamToken
@@ -1500,6 +1529,26 @@ components:
           items: { type: string }
 
     # ─── Team Auth Schemas ────────────────────────────────────────
+    ChangePasscodeInput:
+      type: object
+      required: [currentPasscode, newPasscode]
+      properties:
+        currentPasscode:
+          type: string
+          minLength: 1
+          description: The current team passcode (used to verify identity)
+        newPasscode:
+          type: string
+          minLength: 8
+          description: The new passcode (minimum 8 characters)
+
+    ChangePasscodeResult:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
     TeamTokenRequest:
       type: object
       required: [passcode]

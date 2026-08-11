@@ -407,6 +407,23 @@ export interface WebhookIngestResult {
   validationErrors?: string[];
 }
 
+export interface ChangePasscodeInput {
+  /**
+     * The current team passcode (used to verify identity)
+     * @minLength 1
+     */
+  currentPasscode: string;
+  /**
+     * The new passcode (minimum 8 characters)
+     * @minLength 8
+     */
+  newPasscode: string;
+}
+
+export interface ChangePasscodeResult {
+  ok: boolean;
+}
+
 export interface TeamTokenRequest {
   /**
      * The team passcode (SESSION_SECRET value)

@@ -19,4 +19,11 @@ export interface TaskInput {
   assigneeId?: number | null;
   /** @nullable */
   dueDate?: Date | null;
+  /** @nullable */
+  sourcePlatform?: string | null;
+  resourceRequired?: unknown;
+  /** @nullable */
+  deliveryFormat?: string | null;
+  /** @nullable */
+  notifyVia?: string | null;
 }

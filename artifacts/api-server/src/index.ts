@@ -65,6 +65,16 @@ async function applyStartupMigrations(): Promise<void> {
   `);
   logger.info("Startup migration: uc_orders webhook_recovery column ensured");
 
+  // Create team_settings table for DB-backed passcode storage.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_settings (
+      id            text PRIMARY KEY DEFAULT 'singleton',
+      passcode_hash text,
+      updated_at    timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  logger.info("Startup migration: team_settings table ensured");
+
   // Partial unique index on payment_reference — prevents duplicate orders for
   // the same Paystack (or other) reference.  Excludes empty strings so COD
   // orders (no reference) are unaffected.

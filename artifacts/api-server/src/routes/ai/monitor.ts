@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
+import { requireTeamAuth } from "../auth.js";
 import {
   AiQueryBody,
   AiQueryResponse,
@@ -59,7 +60,7 @@ router.post("/ai/query", async (req, res): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/ai/report — return the latest cached report (or generate one)
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/ai/report", async (_req, res): Promise<void> => {
+router.get("/ai/report", requireTeamAuth, async (_req, res): Promise<void> => {
   if (!latestReport) {
     // Auto-generate on first access
     try {
@@ -76,7 +77,7 @@ router.get("/ai/report", async (_req, res): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/ai/report — force-generate a fresh report
 // ─────────────────────────────────────────────────────────────────────────────
-router.post("/ai/report", async (_req, res): Promise<void> => {
+router.post("/ai/report", requireTeamAuth, async (_req, res): Promise<void> => {
   try {
     latestReport = await generateReport();
     res.json(GenerateAiReportResponse.parse(latestReport));
@@ -89,7 +90,7 @@ router.post("/ai/report", async (_req, res): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/ai/push — manually push summary to Ultra Clear AI orchestrator
 // ─────────────────────────────────────────────────────────────────────────────
-router.post("/ai/push", async (_req, res): Promise<void> => {
+router.post("/ai/push", requireTeamAuth, async (_req, res): Promise<void> => {
   const webhookUrl = process.env.AI_ORCHESTRATOR_WEBHOOK_URL;
 
   try {

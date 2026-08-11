@@ -6,8 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface AiQueryAnswer {
-  answer: string;
-  generatedAt: Date;
-  source?: string;
+export interface ChangePasscodeResult {
+  ok: boolean;
 }
