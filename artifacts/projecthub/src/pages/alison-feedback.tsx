@@ -343,17 +343,23 @@ function LoginGate({ onToken }: LoginGateProps) {
 // ── Entry card ────────────────────────────────────────────────────────────────
 
 /**
- * Splits `text` on `keyword` (case-insensitive) and returns an array of React
- * nodes where every match is wrapped in a highlighted <mark> span.
+ * Splits `text` on any of the provided `keywords` (case-insensitive) and
+ * returns an array of React nodes where every match is wrapped in a
+ * highlighted <mark> span.  Accepts multiple terms so both the keyword-chip
+ * filter and the free-text search box can highlight simultaneously.
  */
-function HighlightedText({ text, keyword }: { text: string; keyword: string }) {
-  if (!keyword || !text) return <>{text}</>;
-  const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+function HighlightedText({ text, keywords }: { text: string; keywords: string[] }) {
+  const active = keywords.filter(Boolean);
+  if (!active.length || !text) return <>{text}</>;
+  const pattern = active
+    .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const regex = new RegExp(`(${pattern})`, 'gi');
   const parts = text.split(regex);
   return (
     <>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        i % 2 === 1 ? (
           <mark
             key={i}
             className="bg-amber-200/80 text-amber-900 font-semibold rounded-sm px-0.5 not-italic"
@@ -368,7 +374,7 @@ function HighlightedText({ text, keyword }: { text: string; keyword: string }) {
   );
 }
 
-function EntryCard({ entry, highlight }: { entry: FeedbackEntry; highlight?: string | null }) {
+function EntryCard({ entry, highlights }: { entry: FeedbackEntry; highlights?: string[] }) {
   const [expanded, setExpanded] = useState(false);
   const isDown = entry.rating === 'down';
 
@@ -385,8 +391,8 @@ function EntryCard({ entry, highlight }: { entry: FeedbackEntry; highlight?: str
           }
           <p className="text-sm font-medium text-foreground leading-snug">
             {entry.question
-              ? highlight
-                ? <HighlightedText text={entry.question} keyword={highlight} />
+              ? (highlights && highlights.length > 0)
+                ? <HighlightedText text={entry.question} keywords={highlights} />
                 : entry.question
               : <em className="text-muted-foreground font-normal">No question recorded</em>
             }
@@ -778,7 +784,11 @@ export default function AlisonFeedbackPage() {
 
         <div className="space-y-3">
           {shown.map((entry, i) => (
-            <EntryCard key={`${entry.ts}-${i}`} entry={entry} highlight={keywordFilter} />
+            <EntryCard
+              key={`${entry.ts}-${i}`}
+              entry={entry}
+              highlights={[keywordFilter, normalizedSearch].filter(Boolean) as string[]}
+            />
           ))}
         </div>
 
