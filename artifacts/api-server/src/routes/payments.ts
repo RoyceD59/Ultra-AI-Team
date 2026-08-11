@@ -314,6 +314,9 @@ router.post(
     const signature = String(req.headers["x-paystack-signature"] ?? "");
     const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
 
+    const requireSignature =
+      process.env["PAYSTACK_WEBHOOK_REQUIRED_SIGNATURE"] === "true";
+
     if (secretKey && rawBody) {
       const expected = createHmac("sha512", secretKey)
         .update(rawBody)
@@ -327,8 +330,30 @@ router.post(
       // Raw body was not captured — reject to avoid processing unverified events.
       res.status(400).json({ error: "Raw body unavailable for signature check" });
       return;
+    } else {
+      // PAYSTACK_SECRET_KEY is not configured — signature verification is skipped.
+      // This is acceptable in a local dev/test environment.
+      // In production this is a security risk: any caller can forge charge.success events.
+      console.warn(
+        "[Paystack webhook] ⚠️  SECURITY WARNING: PAYSTACK_SECRET_KEY is not set. " +
+          "Webhook signature verification is DISABLED. " +
+          "Set PAYSTACK_SECRET_KEY in your environment to enable it. " +
+          "If this is a production deployment, set PAYSTACK_WEBHOOK_REQUIRED_SIGNATURE=true " +
+          "to hard-reject unverified requests."
+      );
+      if (requireSignature) {
+        // Hard-reject: operator has explicitly opted in to strict mode.
+        console.error(
+          "[Paystack webhook] PAYSTACK_WEBHOOK_REQUIRED_SIGNATURE=true but " +
+            "PAYSTACK_SECRET_KEY is missing — rejecting request."
+        );
+        res.status(403).json({
+          error:
+            "Webhook signature verification is required but no secret key is configured.",
+        });
+        return;
+      }
     }
-    // If no PAYSTACK_SECRET_KEY is configured (dev/test), skip verification.
 
     // ── Event dispatch ───────────────────────────────────────────────────────
     const event = req.body as {
