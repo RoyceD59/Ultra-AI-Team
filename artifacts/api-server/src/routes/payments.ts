@@ -215,11 +215,21 @@ router.get(
 router.post(
   "/payments/paystack/init",
   async (req: Request, res: Response): Promise<void> => {
-    const { email, amount } = req.body as { email: string; amount: number };
+    const { email, amount, callbackUrl } = req.body as {
+      email: string;
+      amount: number;
+      callbackUrl?: string;
+    };
     if (!email || !amount) {
       res.status(400).json({ error: "email and amount required" });
       return;
     }
+
+    // Use the deep-link redirect the client sent (e.g. uc-companion://paystack/callback)
+    // so expo-web-browser can auto-close after Paystack redirects back.
+    const resolvedCallback =
+      callbackUrl ??
+      `${process.env["WC_BASE_URL"] ?? "https://www.ucfilters.com"}/paystack/callback`;
 
     const secretKey = process.env["PAYSTACK_SECRET_KEY"];
     if (!secretKey) {
@@ -243,9 +253,7 @@ router.post(
           email,
           amount: Math.round(amount * 100),
           currency: "KES",
-          callback_url: `${
-            process.env["WC_BASE_URL"] ?? "https://www.ucfilters.com"
-          }/paystack/callback`,
+          callback_url: resolvedCallback,
         }),
       });
       const psData = (await psRes.json()) as {

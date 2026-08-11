@@ -152,17 +152,30 @@ export default function CheckoutScreen() {
   async function handlePaystack() {
     setProcessing(true);
     try {
-      const r = await api.paystackInit(user?.email ?? 'customer@ucfilters.com', total);
+      // Pass a deep-link redirect so openAuthSessionAsync can auto-close the browser
+      const redirectUri = 'uc-companion://paystack/callback';
+      const r = await api.paystackInit(
+        user?.email ?? 'customer@ucfilters.com',
+        total,
+        redirectUri,
+      );
       setProcessing(false);
-      // Open Paystack hosted checkout — Paystack handles all card/mobile-money data
-      await WebBrowser.openBrowserAsync(r.authorizationUrl);
-      // Always verify with the real Paystack API after the browser closes;
-      // never trust browser-close state alone as proof of payment.
+
+      // openAuthSessionAsync monitors for the redirectUri and closes the browser
+      // automatically once Paystack redirects back — no manual close needed.
+      const result = await WebBrowser.openAuthSessionAsync(r.authorizationUrl, redirectUri);
+
       setProcessing(true);
+
+      // Verify regardless of how the browser closed (success redirect, cancel, or dismiss).
+      // The server calls Paystack's API directly — client cannot fake a verified status.
       const verified = await api.paystackVerify(r.reference);
       setProcessing(false);
+
       if (verified.success && verified.status === 'success') {
         await createOrder('paystack', r.reference);
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        // User cancelled — don't show an error, just let them try again
       } else {
         Alert.alert(
           'Payment not confirmed',
