@@ -593,6 +593,174 @@ router.get("/uc/products", async (req: Request, res: Response): Promise<void> =>
   }
 });
 
+// ─── Product compatibility map ────────────────────────────────────────────────
+// Keyed by full SKU or SKU prefix (ends with "-").
+// Values are { ids: product IDs from MOCK_PRODUCTS, reason: compatibilityReason }.
+const COMPATIBILITY_MAP: Record<string, { ids: number[]; reason: string }> = {
+  // All filter bottles → bottle replacement cartridge + carry sleeve
+  "UC-BTL-HFX-001": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-TGO-002": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-VDP-003": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-FLX-004": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-TMB-005": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-GYM-006": { ids: [22, 21], reason: "Replacement Filter" },
+  "UC-BTL-BRZ-008": { ids: [22, 21], reason: "Replacement Filter" },
+  // Survivor Straw → straw cartridge + replacement shell
+  "UC-STR-SVV-007": { ids: [26, 27], reason: "Replacement Filter" },
+  // EcoSmart Elite (advanced portable filter) → bottle cartridge
+  "UC-ESE-ELT-009": { ids: [22], reason: "Replacement Filter" },
+  // Sweet Home faucet filter → faucet cartridge
+  "UC-FCT-SWH-011": { ids: [23], reason: "Replacement Filter" },
+  // Standard shower/skin filters → shower cartridge
+  "UC-SHW-JAD-015": { ids: [24], reason: "Replacement Filter" },
+  "UC-SHW-DFF-016": { ids: [24], reason: "Replacement Filter" },
+  "UC-SHW-DCR-017": { ids: [24], reason: "Replacement Filter" },
+  "UC-SKW-SHF-022": { ids: [24], reason: "Replacement Filter" },
+  // Derma Flux facial faucet filter → Derma Flux cartridge
+  "UC-SKW-DFS-024": { ids: [25], reason: "Replacement Filter" },
+  // Replacement cartridges → matching parent filter as accessory suggestion
+  "UC-RPL-BTL-010": { ids: [21], reason: "Compatible Accessory" },
+  "UC-RPL-FCT-014": { ids: [11], reason: "Compatible Accessory" },
+  "UC-RPL-SHW-018": { ids: [15, 17, 18], reason: "Compatible Accessory" },
+  "UC-SKW-DFO-025": { ids: [19], reason: "Compatible Accessory" },
+  "UC-BOG-FCS-017": { ids: [7, 27], reason: "Compatible Accessory" },
+  "UC-BOG-SHL-018": { ids: [7, 26], reason: "Compatible Accessory" },
+  // Bottle sleeve → any bottle is compatible; suggest cartridge
+  "UC-ACC-SLV-021": { ids: [22], reason: "Compatible Accessory" },
+};
+
+// Returns the compatibilityReason for a product based on its tags/category.
+function resolveCompatibilityReason(
+  product: Record<string, unknown>,
+  defaultReason: string
+): string {
+  const tags = product["tags"] as { name: string }[] | undefined;
+  if (tags?.some((t) => t.name === "replacement")) return "Replacement Filter";
+  const cats = product["categories"] as { name: string }[] | undefined;
+  if (cats?.some((c) => c.name === CAT_ACCESS.name)) return "Compatible Accessory";
+  return defaultReason;
+}
+
+router.get("/uc/products/compatibility", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rawSkus = req.query["skus"];
+    const skus: string[] = typeof rawSkus === "string" && rawSkus.trim()
+      ? rawSkus.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    // Collect compatible product IDs + their default reason from the map.
+    const collected: Map<number, string> = new Map();
+
+    for (const sku of skus) {
+      const entry = COMPATIBILITY_MAP[sku];
+      if (entry) {
+        for (const id of entry.ids) {
+          // First writer wins for reason; avoid overwriting with a weaker match.
+          if (!collected.has(id)) collected.set(id, entry.reason);
+        }
+      }
+    }
+
+    // WooCommerce cross-sell enrichment (best-effort; silently skipped when absent).
+    if (hasWCCredentials() && skus.length > 0) {
+      for (const sku of skus) {
+        // Look up the WC product by SKU to get its cross_sell_ids.
+        const wcProducts = await wcFetchArray("/products", { sku, per_page: "1" });
+        const wcp = wcProducts?.[0];
+        const crossSellIds = Array.isArray(wcp?.["cross_sell_ids"])
+          ? (wcp["cross_sell_ids"] as number[])
+          : [];
+        for (const id of crossSellIds) {
+          if (!collected.has(id)) collected.set(id, "Compatible Accessory");
+        }
+      }
+    }
+
+    // Resolve full product objects.
+    let results: Record<string, unknown>[] = [];
+
+    if (collected.size > 0) {
+      const ids = [...collected.keys()];
+
+      if (hasWCCredentials()) {
+        const include = ids.join(",");
+        const wcProducts = await wcFetchArray("/products", { include, per_page: "50" });
+        if (wcProducts && wcProducts.length > 0) {
+          results = wcProducts.map((p) => {
+            const norm = normalizeProduct(p);
+            return {
+              ...norm,
+              compatibilityReason: resolveCompatibilityReason(
+                norm,
+                collected.get(Number(norm["id"])) ?? "Compatible Accessory"
+              ),
+            };
+          });
+        }
+      }
+
+      // Fall back to MOCK_PRODUCTS for any IDs not resolved from WooCommerce.
+      const resolvedIds = new Set(results.map((p) => Number(p["id"])));
+      for (const id of ids) {
+        if (!resolvedIds.has(id)) {
+          const mock = MOCK_PRODUCTS.find((p) => p["id"] === id);
+          if (mock) {
+            results.push({
+              ...mock,
+              compatibilityReason: resolveCompatibilityReason(
+                mock,
+                collected.get(id) ?? "Compatible Accessory"
+              ),
+            });
+          }
+        }
+      }
+    }
+
+    // Best-seller fallback — return first 4 products when nothing was matched.
+    if (results.length === 0) {
+      let fallback: Record<string, unknown>[] = [];
+      if (hasWCCredentials()) {
+        const wc = await wcFetchArray("/products", { orderby: "popularity", per_page: "4" });
+        if (wc && wc.length > 0) {
+          fallback = wc.map(normalizeProduct);
+        }
+      }
+      if (fallback.length === 0) {
+        fallback = MOCK_PRODUCTS.slice(0, 4);
+      }
+      results = fallback.map((p) => ({
+        ...p,
+        compatibilityReason: resolveCompatibilityReason(p, "Compatible Accessory"),
+      }));
+    }
+
+    // Deduplicate (by id) and cap at 8.
+    const seen = new Set<number>();
+    const deduped: Record<string, unknown>[] = [];
+    for (const p of results) {
+      const pid = Number(p["id"]);
+      if (!seen.has(pid)) {
+        seen.add(pid);
+        deduped.push(p);
+        if (deduped.length >= 8) break;
+      }
+    }
+
+    // Apply product-media overlays.
+    const mediaMap = await fetchProductMediaMap(deduped.map((p) => Number(p["id"])));
+    res.json(
+      deduped.map((p) => ({
+        ...applyProductMedia(p, mediaMap.get(Number(p["id"]))),
+        compatibilityReason: p["compatibilityReason"],
+      }))
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to fetch product compatibility");
+    res.status(500).json({ error: "Failed to fetch product compatibility" });
+  }
+});
+
 router.get("/uc/products/:id", async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params["id"]));
   try {
