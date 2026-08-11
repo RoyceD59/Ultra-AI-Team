@@ -342,7 +342,33 @@ function LoginGate({ onToken }: LoginGateProps) {
 
 // ── Entry card ────────────────────────────────────────────────────────────────
 
-function EntryCard({ entry }: { entry: FeedbackEntry }) {
+/**
+ * Splits `text` on `keyword` (case-insensitive) and returns an array of React
+ * nodes where every match is wrapped in a highlighted <mark> span.
+ */
+function HighlightedText({ text, keyword }: { text: string; keyword: string }) {
+  if (!keyword || !text) return <>{text}</>;
+  const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const parts = text.split(regex);
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark
+            key={i}
+            className="bg-amber-200/80 text-amber-900 font-semibold rounded-sm px-0.5 not-italic"
+          >
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+function EntryCard({ entry, highlight }: { entry: FeedbackEntry; highlight?: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const isDown = entry.rating === 'down';
 
@@ -358,7 +384,12 @@ function EntryCard({ entry }: { entry: FeedbackEntry }) {
             : <ThumbsUp   className="w-4 h-4 text-green-500  flex-shrink-0 mt-0.5" />
           }
           <p className="text-sm font-medium text-foreground leading-snug">
-            {entry.question || <em className="text-muted-foreground font-normal">No question recorded</em>}
+            {entry.question
+              ? highlight
+                ? <HighlightedText text={entry.question} keyword={highlight} />
+                : entry.question
+              : <em className="text-muted-foreground font-normal">No question recorded</em>
+            }
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -747,7 +778,7 @@ export default function AlisonFeedbackPage() {
 
         <div className="space-y-3">
           {shown.map((entry, i) => (
-            <EntryCard key={`${entry.ts}-${i}`} entry={entry} />
+            <EntryCard key={`${entry.ts}-${i}`} entry={entry} highlight={keywordFilter} />
           ))}
         </div>
 
