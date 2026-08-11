@@ -1,11 +1,12 @@
 /**
- * Google Sheets public CSV fetch utility.
+ * Google Sheets fetch utility.
  *
- * Accepts a public "Anyone with the link can view" Google Sheets share URL,
- * extracts the spreadsheet ID and optional sheet GID, and returns the rows
- * as an array of plain objects (same shape as xlsx sheet_to_json output).
+ * Supports two modes:
+ *   1. Public fetch  — "Anyone with the link can view" sheets, no auth required.
+ *   2. OAuth fetch   — Private sheets accessed with a Google OAuth 2.0 access token.
  *
- * No Google account or OAuth is required — the sheet must be publicly shared.
+ * The caller passes an optional `accessToken`. When present, requests are sent
+ * with `Authorization: Bearer <token>` which allows access to private sheets.
  */
 
 export interface RawRow {
@@ -111,24 +112,49 @@ function splitCsvLine(line: string): string[] {
 }
 
 /**
- * Fetch a public Google Sheet as parsed CSV rows.
+ * Fetch a Google Sheet as parsed CSV rows.
+ *
+ * @param shareUrl   Google Sheets share URL.
+ * @param gid        Optional sheet GID override.
+ * @param accessToken  If provided, sent as `Authorization: Bearer <token>` to
+ *                     allow access to private sheets. When omitted, the request
+ *                     is made without credentials (public sheets only).
+ *
  * Throws on network errors, non-200 responses, or HTML redirect/login pages
- * (which Google returns when a sheet is private or sharing is revoked).
+ * (which Google returns when a sheet is private and no valid token is supplied).
  */
 export async function fetchSheetRows(
   shareUrl: string,
-  gid?: string
+  gid?: string,
+  accessToken?: string | null
 ): Promise<RawRow[]> {
   const csvUrl = sheetsShareUrlToCsvUrl(shareUrl, gid);
+
+  const headers: Record<string, string> = {
+    Accept: "text/csv,text/plain,*/*",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
   const res = await fetch(csvUrl, {
-    headers: { Accept: "text/csv,text/plain,*/*" },
+    headers,
     signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
+    const isPrivateError = res.status === 401 || res.status === 403;
+    if (isPrivateError && !accessToken) {
+      throw new Error(
+        `Could not fetch sheet data (HTTP ${res.status}). ` +
+          "The sheet appears to be private. Connect your Google account to access private sheets."
+      );
+    }
     throw new Error(
       `Could not fetch sheet data (HTTP ${res.status}). ` +
-        "Make sure the spreadsheet is shared as 'Anyone with the link can view'."
+        (accessToken
+          ? "Check that the connected Google account has access to this sheet."
+          : "Make sure the spreadsheet is shared as 'Anyone with the link can view'.")
     );
   }
 
@@ -138,9 +164,16 @@ export async function fetchSheetRows(
   // or sharing has been revoked (Google returns 200 with HTML in that case).
   const trimmed = csv.trimStart();
   if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html") || trimmed.startsWith("<HTML")) {
+    if (!accessToken) {
+      throw new Error(
+        "Google returned a login page instead of CSV data. " +
+          "The sheet appears to be private. Connect your Google account to access private sheets, " +
+          "or share the sheet as 'Anyone with the link can view'."
+      );
+    }
     throw new Error(
-      "Google returned a login page instead of CSV data. " +
-        "Make sure the spreadsheet is still shared as 'Anyone with the link can view'."
+      "Google returned a login page despite a valid OAuth token. " +
+        "Your Google authorization may have expired — please disconnect and reconnect your account."
     );
   }
 

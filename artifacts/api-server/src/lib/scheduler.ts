@@ -11,6 +11,7 @@ import { db, ucAiFeedbackTable, sheetSyncsTable, membersTable } from "@workspace
 import { lt, desc, eq } from "drizzle-orm";
 import { runSheetSync } from "../routes/contacts-sync.js";
 import { sendViaResend } from "./resend.js";
+import { getValidAccessToken } from "./google-auth.js";
 
 export function startScheduler() {
   // Daily at 08:00 UTC — generate a fresh report and push to the orchestrator
@@ -106,9 +107,20 @@ export function startScheduler() {
       const gidMatch = sync.sheetUrl.match(/[#&?]gid=(\d+)/);
       const gid = gidMatch?.[1];
 
+      // Get OAuth access token for private sheets (falls back to null = public mode)
+      let accessToken: string | null = null;
+      try {
+        accessToken = await getValidAccessToken();
+        if (accessToken) {
+          logger.info("Scheduler: using Google OAuth token for private sheet access");
+        }
+      } catch (tokenErr) {
+        logger.warn({ err: tokenErr }, "Scheduler: could not get OAuth token, trying public access");
+      }
+
       let result: Awaited<ReturnType<typeof runSheetSync>>;
       try {
-        result = await runSheetSync(sync.sheetUrl, gid);
+        result = await runSheetSync(sync.sheetUrl, gid, accessToken);
       } catch (syncErr) {
         const errorMessage = syncErr instanceof Error ? syncErr.message : String(syncErr);
         const errorAt = new Date();

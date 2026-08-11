@@ -4,7 +4,12 @@
  *   GET  /api/contacts/sync/sheets  — return current sheet config + last-sync status
  *   POST /api/contacts/sync/sheets  — save sheet config (body: { sheetUrl, sheetLabel, gid? })
  *   POST /api/contacts/sync/sheets/run — trigger an immediate sync, returns counts
- *   GET  /api/contacts/sync/sheets/tabs — return tab list for a given URL (query: url)
+ *
+ * Google OAuth 2.0 routes (private sheet access):
+ *   GET  /api/contacts/sync/google/status    — connected account info
+ *   GET  /api/contacts/sync/google/auth      — returns { authUrl } to start OAuth
+ *   GET  /api/contacts/sync/google/callback  — OAuth callback (browser redirect)
+ *   DELETE /api/contacts/sync/google         — disconnect Google account
  *
  * All mutating routes require a valid ProjectHub session JWT.
  */
@@ -23,6 +28,15 @@ import {
   fetchSheetRows,
   type RawRow,
 } from "../lib/sheets.js";
+import {
+  isGoogleOAuthConfigured,
+  buildAuthUrl,
+  exchangeCodeAndStore,
+  getValidAccessToken,
+  getCredentialStatus,
+  disconnectGoogle,
+  consumeOAuthState,
+} from "../lib/google-auth.js";
 
 const router: IRouter = Router();
 
@@ -109,9 +123,10 @@ export interface SyncResult {
 
 export async function runSheetSync(
   sheetUrl: string,
-  gid?: string
+  gid?: string,
+  accessToken?: string | null
 ): Promise<SyncResult> {
-  const rawRows = await fetchSheetRows(sheetUrl, gid);
+  const rawRows = await fetchSheetRows(sheetUrl, gid, accessToken);
   const rows = rawRows.map(mapRow).filter((r): r is MappedRow => r !== null);
 
   // Build a map of existing record-ID → contact id
@@ -278,7 +293,7 @@ export async function runSheetSync(
   return { created, updated, skipped, failed };
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ─── Sheet config routes ──────────────────────────────────────────────────────
 
 // GET /contacts/sync/sheets — return current sheet config
 router.get("/contacts/sync/sheets", async (_req, res): Promise<void> => {
@@ -371,7 +386,15 @@ router.post("/contacts/sync/sheets/run", async (req, res): Promise<void> => {
     const gidMatch = sync.sheetUrl.match(/[#&?]gid=(\d+)/);
     const gid = gidMatch?.[1];
 
-    const result = await runSheetSync(sync.sheetUrl, gid);
+    // Try to get OAuth access token for private sheets
+    let accessToken: string | null = null;
+    try {
+      accessToken = await getValidAccessToken();
+    } catch (tokenErr) {
+      logger.warn({ err: tokenErr }, "Sheet sync: could not get OAuth token, trying public access");
+    }
+
+    const result = await runSheetSync(sync.sheetUrl, gid, accessToken);
 
     // Update lastSyncedAt and clear any previous error state
     await db
@@ -394,5 +417,186 @@ router.post("/contacts/sync/sheets/run", async (req, res): Promise<void> => {
     res.status(502).json({ error: message });
   }
 });
+
+// GET /contacts/sync/sheets/preview — server-side CSV preview using stored OAuth token
+// Allows the frontend to preview private sheets after the user connects their Google account.
+router.get("/contacts/sync/sheets/preview", async (req, res): Promise<void> => {
+  if (!requireTeamAuth(req, res)) return;
+
+  const { url, gid } = req.query as { url?: string; gid?: string };
+
+  if (!url || typeof url !== "string") {
+    res.status(400).json({ error: "url query parameter is required" });
+    return;
+  }
+
+  if (!url.includes("docs.google.com/spreadsheets")) {
+    res.status(400).json({ error: "URL must be a Google Sheets link (docs.google.com/spreadsheets/...)" });
+    return;
+  }
+
+  // Try OAuth token for private sheets; fall back to unauthenticated (public sheets)
+  let accessToken: string | null = null;
+  try {
+    accessToken = await getValidAccessToken();
+  } catch {
+    // no token — try public access below
+  }
+
+  try {
+    const rows = await fetchSheetRows(url, gid ?? undefined, accessToken);
+    // Return just the first 5 rows as a preview
+    const preview = rows.slice(0, 5);
+    const headers = preview.length > 0 ? Object.keys(preview[0]!) : [];
+    res.json({ headers, rows: preview, usedOAuth: !!accessToken });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not load sheet";
+    res.status(502).json({ error: message });
+  }
+});
+
+// ─── Google OAuth routes ──────────────────────────────────────────────────────
+
+// GET /contacts/sync/google/status — return connected Google account info (auth required)
+router.get("/contacts/sync/google/status", async (req, res): Promise<void> => {
+  if (!requireTeamAuth(req, res)) return;
+  const status = await getCredentialStatus();
+  res.json({
+    ...status,
+    oauthConfigured: isGoogleOAuthConfigured(),
+  });
+});
+
+// GET /contacts/sync/google/auth — return OAuth URL for the frontend to redirect to
+router.get("/contacts/sync/google/auth", async (req, res): Promise<void> => {
+  if (!requireTeamAuth(req, res)) return;
+
+  if (!isGoogleOAuthConfigured()) {
+    res.status(503).json({
+      error:
+        "Google OAuth is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.",
+    });
+    return;
+  }
+
+  try {
+    const authUrl = buildAuthUrl();
+    res.json({ authUrl });
+  } catch (err) {
+    logger.error({ err }, "Google OAuth: failed to build auth URL");
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not generate auth URL" });
+  }
+});
+
+// GET /contacts/sync/google/callback — handle OAuth redirect from Google
+router.get("/contacts/sync/google/callback", async (req, res): Promise<void> => {
+  const { code, error, state } = req.query as { code?: string; error?: string; state?: string };
+
+  // Validate CSRF state token
+  if (!state || typeof state !== "string" || !consumeOAuthState(state)) {
+    logger.warn("Google OAuth: invalid or missing state — possible CSRF attempt");
+    res.status(400).send(buildCallbackHtml({ success: false, message: "Invalid OAuth state. Please try connecting again." }));
+    return;
+  }
+
+  if (error) {
+    logger.warn({ error }, "Google OAuth: user denied access or error occurred");
+    res.send(buildCallbackHtml({ success: false, message: "Google authorization was denied or cancelled." }));
+    return;
+  }
+
+  if (!code || typeof code !== "string") {
+    res.status(400).send(buildCallbackHtml({ success: false, message: "Missing authorization code." }));
+    return;
+  }
+
+  try {
+    const googleEmail = await exchangeCodeAndStore(code);
+    logger.info({ googleEmail }, "Google OAuth: account connected");
+    res.send(buildCallbackHtml({ success: true, googleEmail }));
+  } catch (err) {
+    logger.error({ err }, "Google OAuth: token exchange failed");
+    const message = err instanceof Error ? err.message : "Authorization failed";
+    res.status(500).send(buildCallbackHtml({ success: false, message }));
+  }
+});
+
+// DELETE /contacts/sync/google — disconnect Google account
+router.delete("/contacts/sync/google", async (req, res): Promise<void> => {
+  if (!requireTeamAuth(req, res)) return;
+
+  try {
+    await disconnectGoogle();
+    res.json({ disconnected: true });
+  } catch (err) {
+    logger.error({ err }, "Google OAuth: disconnect failed");
+    res.status(500).json({ error: "Failed to disconnect Google account" });
+  }
+});
+
+// ─── OAuth callback HTML page ─────────────────────────────────────────────────
+
+/** Escape a string for safe embedding in HTML text content. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Returns a minimal HTML page that posts a message to the opener window
+ * (when opened as a popup) so the frontend can react, then closes itself.
+ * All user-derived text is escaped before insertion into HTML.
+ * The postMessage payload is serialised with JSON.stringify (safe for script context).
+ */
+function buildCallbackHtml(result: { success: true; googleEmail: string } | { success: false; message: string }): string {
+  // Safe JSON payload for the inline script — no user text interpolated directly into JS
+  const payload = JSON.stringify(result);
+
+  const title = result.success ? "Google account connected" : "Authorization failed";
+  const icon  = result.success ? "✅" : "❌";
+  const body  = result.success
+    ? `Signed in as ${escapeHtml((result as { googleEmail: string }).googleEmail)}. You can close this window.`
+    : escapeHtml((result as { message: string }).message);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f9fafb; }
+    .card { background: white; border-radius: 12px; padding: 2rem; max-width: 360px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+    .icon { font-size: 2.5rem; margin-bottom: 1rem; }
+    h1 { font-size: 1.125rem; font-weight: 600; margin: 0 0 0.5rem; }
+    p { font-size: 0.875rem; color: #6b7280; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${icon}</div>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${body}</p>
+  </div>
+  <script>
+    (function () {
+      var payload = ${payload};
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage({ type: 'google-oauth-result', payload: payload }, window.location.origin);
+          setTimeout(function () { window.close(); }, 1500);
+          return;
+        }
+      } catch (e) {}
+      // Fallback: redirect to root if not a popup
+      setTimeout(function () { window.location.href = '/'; }, 2000);
+    })();
+  </script>
+</body>
+</html>`;
+}
 
 export default router;

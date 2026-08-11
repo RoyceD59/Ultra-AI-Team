@@ -43,6 +43,20 @@ async function applyStartupMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS last_error_at   timestamptz;
   `);
   logger.info("Startup migration: sheet_syncs error columns ensured");
+
+  // Create google_oauth_credentials table if it doesn't exist on older deployments
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS google_oauth_credentials (
+      id            serial PRIMARY KEY,
+      google_email  text NOT NULL,
+      access_token  text NOT NULL,
+      refresh_token text NOT NULL,
+      expires_at    timestamptz NOT NULL,
+      created_at    timestamptz NOT NULL DEFAULT now(),
+      updated_at    timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  logger.info("Startup migration: google_oauth_credentials table ensured");
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
