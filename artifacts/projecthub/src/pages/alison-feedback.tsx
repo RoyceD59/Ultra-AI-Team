@@ -25,7 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   ThumbsUp, ThumbsDown, RefreshCw, MessageSquare,
   ChevronDown, ChevronUp, Bot, AlertCircle, Lock, LogOut,
-  BarChart2, Flag, Download, X, RotateCcw,
+  BarChart2, Flag, Download, X, RotateCcw, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -413,6 +413,7 @@ export default function AlisonFeedbackPage() {
     return params.get('keyword') || null;
   });
   const [exporting,      setExporting]      = useState(false);
+  const [searchQuery,    setSearchQuery]    = useState('');
 
   // Keep ?keyword= query param in sync so filtered views are bookmarkable / shareable
   const didMount = useRef(false);
@@ -520,7 +521,15 @@ export default function AlisonFeedbackPage() {
   // We apply the rating tab filter client-side only to the server-returned slice
   // (the server doesn't paginate when keyword is active so all matches are present).
   const byTab = filter === 'all' ? all : all.filter(e => e.rating === filter);
-  const shown = byTab;
+
+  // Client-side free-text search (AND with keywordFilter chip)
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const shown = normalizedSearch
+    ? byTab.filter(e =>
+        e.question.toLowerCase().includes(normalizedSearch) ||
+        e.answer.toLowerCase().includes(normalizedSearch),
+      )
+    : byTab;
 
   const tabCounts = {
     down: downEntries.length,
@@ -635,7 +644,7 @@ export default function AlisonFeedbackPage() {
 
       {/* Filter tabs + list */}
       <div className="space-y-4">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {([
             { key: 'down', label: 'Unhelpful' },
             { key: 'up',   label: 'Helpful'   },
@@ -643,7 +652,7 @@ export default function AlisonFeedbackPage() {
           ] as { key: Filter; label: string }[]).map(tab => (
             <button
               key={tab.key}
-              onClick={() => { setFilter(tab.key); load(false, token, keywordFilter); }}
+              onClick={() => { setFilter(tab.key); setSearchQuery(''); load(false, token, keywordFilter); }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                 filter === tab.key
@@ -662,6 +671,27 @@ export default function AlisonFeedbackPage() {
               </span>
             </button>
           ))}
+
+          {/* Free-text search box */}
+          <div className="relative ml-auto">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              type="search"
+              placeholder="Search entries…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="pl-8 pr-8 h-8 w-48 text-sm"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Active keyword filter chip */}
@@ -696,17 +726,19 @@ export default function AlisonFeedbackPage() {
             <CardContent className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
               <Bot className="w-10 h-10 opacity-30" />
               <p className="text-sm font-medium">
-                {keywordFilter
-                  ? `No ${filter === 'down' ? 'unhelpful' : filter === 'up' ? 'helpful' : ''} entries contain "${keywordFilter}".`
-                  : filter === 'down'
-                    ? 'No unhelpful ratings yet — Alison is doing well!'
-                    : filter === 'up'
-                      ? 'No helpful ratings recorded yet.'
-                      : 'No feedback recorded yet.'}
+                {normalizedSearch
+                  ? `No ${filter === 'down' ? 'unhelpful' : filter === 'up' ? 'helpful' : ''} entries match "${searchQuery}"${keywordFilter ? ` + "${keywordFilter}"` : ''}.`
+                  : keywordFilter
+                    ? `No ${filter === 'down' ? 'unhelpful' : filter === 'up' ? 'helpful' : ''} entries contain "${keywordFilter}".`
+                    : filter === 'down'
+                      ? 'No unhelpful ratings yet — Alison is doing well!'
+                      : filter === 'up'
+                        ? 'No helpful ratings recorded yet.'
+                        : 'No feedback recorded yet.'}
               </p>
               <p className="text-xs">
-                {keywordFilter
-                  ? 'Try a different keyword or clear the filter to see all entries.'
+                {normalizedSearch || keywordFilter
+                  ? 'Try a different search term or clear the filters to see all entries.'
                   : 'Ratings appear here as customers use the Alison chat.'}
               </p>
             </CardContent>
@@ -721,7 +753,7 @@ export default function AlisonFeedbackPage() {
 
         {shown.length > 0 && (
           <p className="text-xs text-muted-foreground text-center pt-2">
-            Showing {shown.length} of {data?.count ?? 0} entr{shown.length === 1 ? 'y' : 'ies'}
+            Showing {shown.length}{normalizedSearch ? ` matched` : ''} of {data?.count ?? 0} entr{(data?.count ?? 0) === 1 ? 'y' : 'ies'}
             {' '}· 7-day stats computed over full log of {data?.totalInLog ?? 0}
             {' '}· Auto-refreshes every minute
           </p>
