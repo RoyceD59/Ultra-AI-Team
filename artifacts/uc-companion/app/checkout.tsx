@@ -45,7 +45,7 @@ export default function CheckoutScreen() {
   const { user } = useAuth();
   const api = useApi();
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('mpesa');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('paystack');
   const [address, setAddress] = useState<UCAddress>({
     ...DEFAULT_ADDRESS,
     firstName: user?.firstName ?? '',

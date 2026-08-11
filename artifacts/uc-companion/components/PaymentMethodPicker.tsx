@@ -6,9 +6,9 @@ import { useColors } from '@/hooks/useColors';
 export type PaymentMethod = 'mpesa' | 'stripe' | 'paystack' | 'cod';
 
 const METHODS: { id: PaymentMethod; label: string; sub: string; icon: keyof typeof Ionicons.glyphMap; color: string; recommended?: boolean }[] = [
-  { id: 'mpesa', label: 'M-Pesa', sub: 'Instant STK push to your phone', icon: 'phone-portrait-outline', color: '#00A651', recommended: true },
+  { id: 'paystack', label: 'Paystack', sub: 'Card, M-Pesa & mobile money', icon: 'wallet-outline', color: '#00C3F7', recommended: true },
+  { id: 'mpesa', label: 'M-Pesa', sub: 'Instant STK push to your phone', icon: 'phone-portrait-outline', color: '#00A651' },
   { id: 'stripe', label: 'Card Payment', sub: 'Visa, Mastercard, Amex', icon: 'card-outline', color: '#635BFF' },
-  { id: 'paystack', label: 'Paystack', sub: 'Pay with card or mobile money', icon: 'wallet-outline', color: '#00C3F7' },
   { id: 'cod', label: 'Cash on Delivery', sub: 'Processing delays may apply', icon: 'cash-outline', color: '#9CA3AF' },
 ];
 
