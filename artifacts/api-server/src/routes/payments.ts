@@ -81,9 +81,9 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
           Timestamp: timestamp,
           TransactionType: "CustomerPayBillOnline",
           Amount: Math.ceil(amount),
-          PartyA: phone.replace(/^0/, "254"),
+          PartyA: phone.replace(/^\+/, "").replace(/^0/, "254"),
           PartyB: shortcode,
-          PhoneNumber: phone.replace(/^0/, "254"),
+          PhoneNumber: phone.replace(/^\+/, "").replace(/^0/, "254"),
           CallBackURL: `${process.env["API_BASE_URL"] || "https://team-horizon--jerryaroyce.replit.app"}/api/payments/mpesa/callback`,
           AccountReference: `Order-${orderId}`,
           TransactionDesc: "UC Filter Purchase",
@@ -134,10 +134,22 @@ router.get(
         }
       );
       const qData = (await qRes.json()) as Record<string, string>;
+
+      // Safaricom returns an error response (HTTP 4xx, no ResultCode) while the
+      // STK push is still being processed by the customer. Only a completed
+      // transaction includes a ResultCode in the body.
+      // ResultCode "0"    → paid successfully
+      // ResultCode "1032" → customer cancelled (or timed out on their handset)
+      // Any other code    → declined / error
+      // No ResultCode     → still in progress (pending)
       const resultCode = qData["ResultCode"];
+      if (!resultCode) {
+        // Transaction still in progress — keep polling
+        res.json({ status: "pending", resultDesc: qData["errorMessage"] ?? "Processing" });
+        return;
+      }
       res.json({
-        status:
-          resultCode === "0" ? "success" : resultCode === "1032" ? "pending" : "failed",
+        status: resultCode === "0" ? "success" : "failed",
         resultDesc: qData["ResultDesc"],
       });
     } catch {
