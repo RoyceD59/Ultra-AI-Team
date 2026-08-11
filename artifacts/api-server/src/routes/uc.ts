@@ -1188,7 +1188,7 @@ router.patch("/uc/customer/profile", async (req: Request, res: Response): Promis
 async function verifyPaymentOnServer(
   method: string,
   reference: string
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<{ ok: boolean; reason?: string; retryable?: boolean }> {
   // COD requires no pre-payment
   if (method === "cod") return { ok: true };
 
@@ -1259,11 +1259,22 @@ async function verifyPaymentOnServer(
         `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
         { headers: { Authorization: `Bearer ${secretKey}` } }
       );
+      // Treat upstream 5xx / 429 as a transient outage — Paystack blips commonly
+      // manifest as a non-2xx HTTP response rather than a thrown exception.
+      if (!vRes.ok) {
+        const isTransient = vRes.status >= 500 || vRes.status === 429;
+        return {
+          ok: false,
+          reason: "Paystack verification request failed",
+          ...(isTransient ? { retryable: true } : {}),
+        };
+      }
       const vData = (await vRes.json()) as { status: boolean; data?: { status: string } };
       const ok = vData.status && vData.data?.status === "success";
       return ok ? { ok: true } : { ok: false, reason: `Paystack status: ${vData.data?.status ?? "unknown"}` };
     } catch {
-      return { ok: false, reason: "Paystack verification request failed" };
+      // Network or timeout — transient; caller should offer a retry path.
+      return { ok: false, reason: "Paystack verification request failed", retryable: true };
     }
   }
 
@@ -1509,7 +1520,14 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
   // Server-side payment verification — gate order creation on confirmed payment.
   const verification = await verifyPaymentOnServer(paymentMethod, paymentReference ?? "");
   if (!verification.ok) {
-    res.status(402).json({ error: "Payment not verified", reason: verification.reason });
+    // Use 503 (not 402) for transient failures so the client's ApiError
+    // treats status >= 500 as retryable and offers the right advice.
+    const httpStatus = verification.retryable ? 503 : 402;
+    res.status(httpStatus).json({
+      error: "Payment not verified",
+      reason: verification.reason,
+      ...(verification.retryable ? { retryable: true } : {}),
+    });
     return;
   }
 

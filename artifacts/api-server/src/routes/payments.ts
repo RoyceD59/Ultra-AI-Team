@@ -261,6 +261,17 @@ router.post(
           callback_url: resolvedCallback,
         }),
       });
+      // Treat upstream 5xx / 429 as a transient outage — Paystack blips commonly
+      // manifest as a non-2xx HTTP response rather than a thrown exception.
+      if (!psRes.ok) {
+        const isTransient = psRes.status >= 500 || psRes.status === 429;
+        const status = isTransient ? 500 : 400;
+        res.status(status).json({
+          error: "Paystack is temporarily unavailable. Please try again.",
+          ...(isTransient ? { retryable: true } : {}),
+        });
+        return;
+      }
       const psData = (await psRes.json()) as {
         status: boolean;
         data: { authorization_url: string; access_code: string; reference: string };
@@ -293,10 +304,21 @@ router.get(
         `https://api.paystack.co/transaction/verify/${encodeURIComponent(String(req.params["reference"]))}`,
         { headers: { Authorization: `Bearer ${secretKey}` } }
       );
+      // Treat upstream 5xx / 429 as a transient outage so the client can retry
+      // rather than showing "Payment Declined" for a temporary Paystack blip.
+      if (!vRes.ok) {
+        const isTransient = vRes.status >= 500 || vRes.status === 429;
+        const status = isTransient ? 500 : 400;
+        res.status(status).json({
+          error: "Verification failed. Please try again.",
+          ...(isTransient ? { retryable: true } : {}),
+        });
+        return;
+      }
       const vData = (await vRes.json()) as { status: boolean; data: { status: string } };
       res.json({ success: vData.status && vData.data.status === "success", status: vData.data?.status });
     } catch {
-      res.status(500).json({ error: "Verification failed" });
+      res.status(500).json({ error: "Verification failed. Please try again.", retryable: true });
     }
   }
 );

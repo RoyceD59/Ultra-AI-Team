@@ -8,7 +8,7 @@ import { useColors } from '@/hooks/useColors';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/context/CartContext';
 import { useAuth } from '@/context/AuthContext';
-import { useApi, UCAddress } from '@/hooks/useApi';
+import { useApi, UCAddress, ApiError } from '@/hooks/useApi';
 import PaymentMethodPicker, { PaymentMethod } from '@/components/PaymentMethodPicker';
 import * as WebBrowser from 'expo-web-browser';
 import * as Haptics from 'expo-haptics';
@@ -206,35 +206,54 @@ export default function CheckoutScreen() {
       if (verified.success && verified.status === 'success') {
         await createOrder('paystack', r.reference);
       } else {
-        // Only show an error if Paystack explicitly reported a non-success status.
-        // If the user simply closed the browser the reference will be pending/abandoned
-        // and verified.success will be false — no order is created, no error shown.
-        if (verified.status && verified.status !== 'abandoned') {
+        // Branch on the specific Paystack status to give the right advice:
+        //   abandoned / null  → user closed the browser; silent, no error shown
+        //   failed            → card/mobile-money decline; ask them to check details
+        //   anything else     → unexpected non-success; generic "not confirmed" message
+        const st = verified.status;
+        if (!st || st === 'abandoned') {
+          // User cancelled — nothing to do
+        } else if (st === 'failed') {
           Alert.alert(
-            'Payment not confirmed',
-            `Paystack reported status: "${verified.status}". No order was created. Please try again.`,
+            'Payment Declined',
+            'Your payment was not completed. Please check your card details or try a different payment method.',
+          );
+        } else {
+          Alert.alert(
+            'Payment Not Confirmed',
+            `Paystack reported status: "${st}". No order was created. Please try again.`,
           );
         }
       }
-    } catch {
+    } catch (e) {
       setProcessing(false);
-      Alert.alert(
-        'Paystack Unavailable',
-        'Paystack is temporarily unavailable. You can try again or place your order with Cash on Delivery.',
-        [
-          {
-            text: 'Try again',
-            onPress: () => handlePaystack(),
-          },
-          {
-            text: 'Pay with COD instead',
-            onPress: () => {
-              setPaymentMethod('cod');
+      // Distinguish a transient server blip (retryable) from a permanent decline.
+      const isRetryable = e instanceof ApiError ? e.retryable : true;
+      if (isRetryable) {
+        Alert.alert(
+          'Paystack Unavailable',
+          'Paystack is temporarily unavailable. You can try again or place your order with Cash on Delivery.',
+          [
+            {
+              text: 'Try again',
+              onPress: () => handlePaystack(),
             },
-            style: 'cancel',
-          },
-        ],
-      );
+            {
+              text: 'Pay with COD instead',
+              onPress: () => {
+                setPaymentMethod('cod');
+              },
+              style: 'cancel',
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          'Payment Declined',
+          (e instanceof Error ? e.message : null) ||
+            'Your payment could not be completed. Please check your card details and try a different payment method.',
+        );
+      }
     }
   }
 
@@ -277,9 +296,13 @@ export default function CheckoutScreen() {
       setMpesaWaiting(false);
       setProcessing(false);
       router.replace(`/order/${order.id}` as never);
-    } catch {
+    } catch (e) {
       setProcessing(false);
       setMpesaWaiting(false);
+      // Re-throw ApiError so callers (handlePaystack, handleStripeCheckout)
+      // can inspect retryable and show the correct advice (retry/COD vs
+      // "check your card") rather than a generic "contact support" message.
+      if (e instanceof ApiError) throw e;
       Alert.alert('Error', 'Order could not be created. Please contact support.');
     }
   }

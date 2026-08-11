@@ -7,6 +7,31 @@ const getBase = () =>
     : 'http://localhost:8080';
 
 /**
+ * Structured error thrown by the useApi fetch helpers on non-2xx responses.
+ * Callers can inspect `retryable` to decide whether to offer a retry path:
+ *   - `retryable: true`  → server-side blip (5xx); safe to retry
+ *   - `retryable: false` → permanent failure (declined card, bad input, etc.)
+ */
+export class ApiError extends Error {
+  /** HTTP status code */
+  status: number;
+  /** True when the server signals the failure is transient (e.g. 5xx outage) */
+  retryable: boolean;
+  /** Raw parsed response body */
+  body: Record<string, unknown>;
+
+  constructor(message: string, status: number, body: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    // Explicit server flag wins; fall back to treating any 5xx as retryable so a
+    // server that forgets to include the flag still produces the right behaviour.
+    this.retryable = body['retryable'] === true || status >= 500;
+    this.body = body;
+  }
+}
+
+/**
  * Product/review media URLs from the API are relative paths
  * ("/api/uc/product-images/…", "/api/storage/objects/…").
  * Resolve them against the API base; absolute and local URIs pass through.
@@ -227,7 +252,10 @@ export function useApi() {
 
   const get = useCallback(async <T>(path: string): Promise<T> => {
     const res = await fetch(`${getBase()}${path}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`${res.status}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ApiError(String(body['error'] ?? res.status), res.status, body);
+    }
     return res.json() as Promise<T>;
   }, [authHeaders]);
 
@@ -238,8 +266,8 @@ export function useApi() {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({})) as { error?: string };
-      throw new Error(err.error || `${res.status}`);
+      const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ApiError(String(errBody['error'] ?? res.status), res.status, errBody);
     }
     return res.json() as Promise<T>;
   }, [authHeaders]);
@@ -251,8 +279,8 @@ export function useApi() {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({})) as { error?: string };
-      throw new Error(err.error || `${res.status}`);
+      const errBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ApiError(String(errBody['error'] ?? res.status), res.status, errBody);
     }
     return res.json() as Promise<T>;
   }, [authHeaders]);
