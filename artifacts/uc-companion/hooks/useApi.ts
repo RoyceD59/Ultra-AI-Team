@@ -293,6 +293,8 @@ export function useApi() {
       return get<UCProduct[]>(`/api/uc/products?${qs}`);
     },
     getProduct: (id: number) => get<UCProduct>(`/api/uc/products/${id}`),
+    getCompatibilityProducts: (skus: string) =>
+      get<UCProduct[]>(`/api/uc/products/compatibility?skus=${encodeURIComponent(skus)}`),
     getProfile: () => get<UCCustomer>('/api/uc/customer/profile'),
     getOrders: () => get<UCOrder[]>('/api/uc/orders'),
     createOrder: (data: {
