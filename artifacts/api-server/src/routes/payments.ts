@@ -1,4 +1,8 @@
 import { Router, type Request, type Response } from "express";
+import { createHmac } from "node:crypto";
+import { db } from "@workspace/db";
+import { ucOrdersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 
 const router = Router();
@@ -292,6 +296,129 @@ router.get(
       res.json({ success: vData.status && vData.data.status === "success", status: vData.data?.status });
     } catch {
       res.status(500).json({ error: "Verification failed" });
+    }
+  }
+);
+
+// ─── Paystack webhook ─────────────────────────────────────────────────────────
+// Paystack sends a POST with an HMAC-SHA512 signature in x-paystack-signature.
+// We verify the signature before touching any data, then handle charge.success
+// events idempotently so duplicate deliveries are safely ignored.
+router.post(
+  "/payments/paystack/webhook",
+  async (req: Request, res: Response): Promise<void> => {
+    const secretKey = process.env["PAYSTACK_SECRET_KEY"];
+
+    // ── Signature verification ───────────────────────────────────────────────
+    const signature = String(req.headers["x-paystack-signature"] ?? "");
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+
+    if (secretKey && rawBody) {
+      const expected = createHmac("sha512", secretKey)
+        .update(rawBody)
+        .digest("hex");
+      if (signature !== expected) {
+        // Return 401 so Paystack knows the payload was rejected; never 200 here.
+        res.status(401).json({ error: "Invalid signature" });
+        return;
+      }
+    } else if (secretKey && !rawBody) {
+      // Raw body was not captured — reject to avoid processing unverified events.
+      res.status(400).json({ error: "Raw body unavailable for signature check" });
+      return;
+    }
+    // If no PAYSTACK_SECRET_KEY is configured (dev/test), skip verification.
+
+    // ── Event dispatch ───────────────────────────────────────────────────────
+    const event = req.body as {
+      event?: string;
+      data?: {
+        reference?: string;
+        status?: string;
+        amount?: number;      // in kobo
+        currency?: string;
+        customer?: { email?: string };
+      };
+    };
+
+    if (event.event !== "charge.success") {
+      // Acknowledge events we do not act on so Paystack stops retrying them.
+      res.json({ received: true });
+      return;
+    }
+
+    const reference = event.data?.reference ?? "";
+    const amountKobo = event.data?.amount ?? 0;
+    const currency = event.data?.currency ?? "KES";
+    const customerEmail = event.data?.customer?.email ?? "";
+
+    if (!reference) {
+      res.status(400).json({ error: "Missing reference in webhook payload" });
+      return;
+    }
+
+    try {
+      // ── Idempotency: look up existing order by payment reference ──────────
+      const existing = await db
+        .select()
+        .from(ucOrdersTable)
+        .where(eq(ucOrdersTable.paymentReference, reference))
+        .limit(1);
+
+      if (existing.length > 0) {
+        const order = existing[0]!;
+
+        if (order.status === "pending") {
+          // Payment confirmed — advance status to processing
+          await db
+            .update(ucOrdersTable)
+            .set({ status: "processing" })
+            .where(eq(ucOrdersTable.id, order.id));
+          console.info(
+            `[Paystack webhook] Order ${order.id} (ref ${reference}) advanced to processing`
+          );
+        } else {
+          // Already processed — safe no-op (duplicate event)
+          console.info(
+            `[Paystack webhook] Duplicate event for ref ${reference} — order ${order.id} already ${order.status}`
+          );
+        }
+
+        // Always return 200 once we've verified and dispatched the event so
+        // Paystack does not retry unnecessarily.
+        res.json({ received: true, orderId: order.id });
+        return;
+      }
+
+      // ── No order found — create a recovery record ─────────────────────────
+      // The app lost connectivity after payment but before createOrder fired.
+      // We persist what Paystack told us so the team can reconcile and fulfil.
+      const totalKes = Math.round(amountKobo / 100);
+
+      const [recovered] = await db
+        .insert(ucOrdersTable)
+        .values({
+          userId:           customerEmail || "webhook-recovery",
+          status:           "processing",
+          total:            String(totalKes),
+          currency,
+          paymentMethod:    "paystack",
+          paymentReference: reference,
+          promoCode:        "",
+          discountPercent:  0,
+          discountAmount:   0,
+          shippingAddress:  {},
+        })
+        .returning();
+
+      console.info(
+        `[Paystack webhook] Recovery order ${recovered!.id} created for ref ${reference} (${currency} ${totalKes})`
+      );
+      res.json({ received: true, orderId: recovered!.id, recovered: true });
+    } catch (err) {
+      console.error("[Paystack webhook] DB error:", err);
+      // Return 500 so Paystack will retry — better to retry than to lose the event.
+      res.status(500).json({ error: "Internal error" });
     }
   }
 );

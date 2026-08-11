@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import path from "node:path";
 import cors from "cors";
 import pinoHttp from "pino-http";
@@ -6,6 +6,26 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
+
+// ─── Raw-body capture for Paystack webhook ────────────────────────────────────
+// express.json() replaces the readable stream, so we must buffer the raw bytes
+// BEFORE the global JSON middleware for any route that needs HMAC verification.
+// We attach them to req.rawBody so the webhook handler can verify the signature.
+app.use(
+  "/api/payments/paystack/webhook",
+  express.raw({ type: "*/*", limit: "1mb" }),
+  (req: Request, _res: Response, next: NextFunction) => {
+    // express.raw() puts the Buffer in req.body; expose it as rawBody and also
+    // parse the JSON so the rest of the handler can read req.body normally.
+    (req as Request & { rawBody: Buffer }).rawBody = req.body as Buffer;
+    try {
+      req.body = JSON.parse((req.body as Buffer).toString("utf8")) as unknown;
+    } catch {
+      req.body = {};
+    }
+    next();
+  }
+);
 
 app.use(
   pinoHttp({
