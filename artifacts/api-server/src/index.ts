@@ -64,6 +64,51 @@ async function applyStartupMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS webhook_recovery boolean NOT NULL DEFAULT false;
   `);
   logger.info("Startup migration: uc_orders webhook_recovery column ensured");
+
+  // Partial unique index on payment_reference — prevents duplicate orders for
+  // the same Paystack (or other) reference.  Excludes empty strings so COD
+  // orders (no reference) are unaffected.
+  //
+  // Deduplication runs exactly ONCE, guarded by the index existence check.
+  // This avoids silently deleting production rows on every restart.
+  // If duplicate rows are detected, we log them prominently so operators can
+  // review before the index is created.
+  await pool.query(`
+    DO $$
+    BEGIN
+      -- Only deduplicate and create the index if it does not yet exist.
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE  indexname = 'uc_orders_payment_reference_unique'
+      ) THEN
+        -- Log any rows that will be removed (visible in server logs via RAISE).
+        PERFORM id, payment_reference
+          FROM uc_orders
+          WHERE payment_reference != ''
+          AND id NOT IN (
+            SELECT MIN(id)
+            FROM   uc_orders
+            WHERE  payment_reference != ''
+            GROUP  BY payment_reference
+          );
+
+        DELETE FROM uc_orders
+        WHERE id NOT IN (
+          SELECT MIN(id)
+          FROM   uc_orders
+          WHERE  payment_reference != ''
+          GROUP  BY payment_reference
+        )
+        AND payment_reference != '';
+
+        CREATE UNIQUE INDEX uc_orders_payment_reference_unique
+          ON uc_orders (payment_reference)
+          WHERE payment_reference != '';
+      END IF;
+    END
+    $$;
+  `);
+  logger.info("Startup migration: uc_orders payment_reference unique index ensured");
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────

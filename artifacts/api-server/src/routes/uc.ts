@@ -32,7 +32,7 @@ import {
   ucReviewsTable, ucProductMediaTable,
   type ReviewMediaItem, type UcProductMedia,
 } from "@workspace/db";
-import { eq, desc, inArray, and, asc } from "drizzle-orm";
+import { eq, desc, inArray, and, asc, ne } from "drizzle-orm";
 import bcryptjs from "bcryptjs";
 import { logger } from "../lib/logger";
 import {
@@ -1513,6 +1513,110 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
+  // ── Idempotency guard ───────────────────────────────────────────────────────
+  // If a non-empty paymentReference already has a *confirmed* order in the DB
+  // (status != "pending-wc"), return it immediately without inserting a second
+  // row or sending another email.
+  // "pending-wc" records are WooCommerce in-flight anchors that have not yet
+  // been confirmed — they are intentionally skipped here so the WC block can
+  // either confirm them (update to "processing") or release them on failure.
+  if (paymentReference) {
+    try {
+      const [existingOrder] = await db
+        .select()
+        .from(ucOrdersTable)
+        .where(
+          and(
+            eq(ucOrdersTable.paymentReference, paymentReference),
+            ne(ucOrdersTable.paymentReference, ""),
+            ne(ucOrdersTable.status, "pending-wc"),
+          )
+        )
+        .limit(1);
+
+      if (existingOrder) {
+        logger.info(
+          { orderId: existingOrder.id },
+          `[orders] duplicate paymentReference "${paymentReference}" — returning existing order`,
+        );
+        const existingItems = await db
+          .select()
+          .from(ucOrderItemsTable)
+          .where(eq(ucOrderItemsTable.orderId, existingOrder.id));
+
+        // If the existing row was created by the webhook recovery path it was
+        // only recorded for team fulfilment — no customer confirmation email was
+        // sent.  The first app call with a valid authenticated user should emit
+        // that receipt now, and mark the row so subsequent retries skip it.
+        if (existingOrder.webhookRecovery) {
+          await db.update(ucOrdersTable)
+            .set({ webhookRecovery: false })
+            .where(eq(ucOrdersTable.id, existingOrder.id))
+            .catch(() => {});
+          const li = existingItems.map(i => ({
+            name:     i.name,
+            quantity: i.quantity,
+            total:    i.total,
+          }));
+          getUserContact(orderUserId).then(contact => {
+            if (contact?.phone) {
+              sendSms(contact.phone, orderConfirmationSms({
+                orderId:   existingOrder.id,
+                total:     existingOrder.total,
+                firstName: contact.firstName,
+              }));
+            }
+            if (contact?.email) {
+              const receipt = buildOrderReceiptEmail({
+                orderId:         existingOrder.id,
+                firstName:       contact.firstName,
+                email:           contact.email,
+                lineItems:       li,
+                total:           existingOrder.total,
+                currency:        existingOrder.currency,
+                paymentMethod:   existingOrder.paymentMethod,
+                shippingAddress: existingOrder.shippingAddress as Record<string, string> | undefined,
+              });
+              sendViaResend({
+                from:    "orders@contacts.ucfilters.com",
+                to:      contact.email,
+                subject: receipt.subject,
+                text:    receipt.text,
+                html:    receipt.html,
+              }).then(ok => {
+                if (!ok) sendEmail({ to: contact.email, ...receipt });
+              });
+            }
+          }).catch(() => {});
+        }
+
+        res.json({
+          id:              existingOrder.id,
+          status:          existingOrder.status,
+          dateCreated:     existingOrder.dateCreated,
+          total:           existingOrder.total,
+          currency:        existingOrder.currency,
+          paymentMethod:   existingOrder.paymentMethod,
+          shippingAddress: existingOrder.shippingAddress ?? {},
+          discountPercent: existingOrder.discountPercent,
+          discountAmount:  existingOrder.discountAmount,
+          promoCode:       existingOrder.promoCode ?? "",
+          lineItems:       existingItems.map(i => ({
+            productId: i.productId,
+            name:      i.name,
+            quantity:  i.quantity,
+            total:     i.total,
+          })),
+        });
+        return;
+      }
+    } catch (dupCheckErr) {
+      // DB temporarily unavailable — log and continue so the order is not lost
+      logger.warn({ err: dupCheckErr }, "[orders] idempotency pre-check failed, proceeding");
+    }
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
   // Resolve discount from promo/referral code (server re-validates; client cannot fake this)
   let discountPercent = 0;
   let discountType: "referral" | "promotion" | null = null;
@@ -1543,8 +1647,223 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
   const discountAmount = Math.round((gross * discountPercent) / 100);
   const netTotal = gross - discountAmount;
 
+  // ── WC order reconciliation helper ─────────────────────────────────────────
+  // Fetches a page of recent WC orders and inspects each one's meta_data array
+  // for an EXACT payment_reference match — never trusts a first-result shortcut.
+  // Returns the matching WC order or null (also null when the WC query fails).
+  async function findWcOrderByRef(ref: string): Promise<Record<string, unknown> | null> {
+    const orders = await wcFetchArray("/orders", { per_page: "25", status: "any" });
+    if (!orders) return null;
+    for (const o of orders) {
+      const meta = o["meta_data"];
+      if (!Array.isArray(meta)) continue;
+      const found = (meta as Array<Record<string, unknown>>).some(
+        m => m["key"] === "payment_reference" && m["value"] === ref
+      );
+      if (found) return o;
+    }
+    return null;
+  }
+
+  // ── WC confirmation helper ──────────────────────────────────────────────────
+  // Atomically transitions the anchor from "pending-wc" to "processing" and
+  // returns true only when THIS call won the state transition.  Callers must
+  // send notifications ONLY when this returns true.
+  async function confirmWcAnchor(anchorId: number): Promise<boolean> {
+    const updated = await db.update(ucOrdersTable)
+      .set({ status: "processing" })
+      .where(and(eq(ucOrdersTable.id, anchorId), eq(ucOrdersTable.status, "pending-wc")))
+      .returning()
+      .catch((e: unknown) => {
+        logger.warn({ err: e, anchorId }, "[orders] confirmWcAnchor DB update failed");
+        return [] as { id: number }[];
+      });
+    return updated.length > 0;
+  }
+
+  // ── WC notification helper ──────────────────────────────────────────────────
+  // Fire-and-forget push + SMS + email for a confirmed WC order.  Must be
+  // called ONLY by the request that won the confirmWcAnchor race.
+  function sendWcOrderNotifications(
+    normalized: Record<string, unknown>,
+    ownerUserId: string,
+  ): void {
+    sendPushToUser(
+      ownerUserId,
+      "✅ Order confirmed!",
+      `Your order #${normalized["id"] ?? "–"} is being processed.`,
+      { screen: "orders", orderId: String(normalized["id"] ?? "") },
+      "orders"
+    );
+    getUserContact(ownerUserId).then(contact => {
+      if (contact?.phone) {
+        sendSms(contact.phone, orderConfirmationSms({
+          orderId:   normalized["id"] as string | number,
+          total:     String(normalized["total"] ?? "0"),
+          firstName: contact.firstName,
+        }));
+      }
+      if (contact?.email) {
+        const li = (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [];
+        const receipt = buildOrderReceiptEmail({
+          orderId:         normalized["id"] as string | number,
+          firstName:       contact.firstName,
+          email:           contact.email,
+          lineItems:       li,
+          total:           String(normalized["total"] ?? "0"),
+          currency:        String(normalized["currency"] ?? "KES"),
+          paymentMethod:   String(normalized["paymentMethod"] ?? ""),
+          shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
+        });
+        sendViaResend({
+          from:    "orders@contacts.ucfilters.com",
+          to:      contact.email,
+          subject: receipt.subject,
+          text:    receipt.text,
+          html:    receipt.html,
+        }).then(ok => {
+          if (!ok) {
+            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
+            sendEmail({ to: contact.email, ...receipt });
+          }
+        });
+      }
+    }).catch(() => {});
+  }
+
   try {
     if (hasWCCredentials()) {
+      // ── WooCommerce idempotency: claim → call → confirm ───────────────────
+      //
+      // Step 1: Atomically insert a "pending-wc" anchor + line items into
+      //   uc_orders / uc_order_items inside a DB transaction BEFORE calling
+      //   WooCommerce.  If either insert fails the whole transaction rolls back.
+      //   The "pending-wc" sentinel is skipped by the pre-check above so it
+      //   never causes a confirmed-order early return.
+      //
+      // Step 2: Call WooCommerce.
+      //
+      // Step 3a (WC success): Call confirmWcAnchor — atomically UPDATE WHERE
+      //   status='pending-wc'.  Send notifications ONLY when it returns true
+      //   (this request won the race).  Concurrent requests that lose skip
+      //   notifications and return the same WC order.
+      //
+      // Step 3b (WC failure): Reconcile by inspecting each candidate WC order's
+      //   meta_data for an EXACT payment_reference match.  If found → try atomic
+      //   confirmation → notify only if we won.  If uncertain (no match or WC
+      //   query fails) → keep anchor intact, return retriable 503.  Anchors for
+      //   permanently failed WC calls are cleaned up by a periodic job.
+
+      let wcAnchorId: number | null = null;
+
+      if (paymentReference) {
+        try {
+          // Atomic insert of anchor + items — if either fails, both roll back.
+          wcAnchorId = await db.transaction(async (tx) => {
+            const [anchor] = await tx.insert(ucOrdersTable).values({
+              userId:           orderUserId,
+              status:           "pending-wc",
+              total:            String(netTotal),
+              currency:         "KES",
+              paymentMethod,
+              paymentReference,
+              promoCode:        promoCode ?? "",
+              discountPercent,
+              discountAmount,
+              shippingAddress:  shippingAddress ?? {},
+            }).returning();
+            const anchorId = anchor!.id;
+            if (productLines.length > 0) {
+              await tx.insert(ucOrderItemsTable).values(
+                productLines.map(({ productId, name, quantity, subtotal: t }) => ({
+                  orderId:   anchorId,
+                  productId,
+                  name,
+                  quantity,
+                  total:     String(t),
+                }))
+              );
+            }
+            return anchorId;
+          });
+        } catch (claimErr) {
+          if (
+            typeof claimErr === "object" && claimErr !== null &&
+            "code" in claimErr &&
+            (claimErr as { code: string }).code === "23505"
+          ) {
+            const [winner] = await db
+              .select()
+              .from(ucOrdersTable)
+              .where(and(
+                eq(ucOrdersTable.paymentReference, paymentReference),
+                ne(ucOrdersTable.paymentReference, ""),
+              ))
+              .limit(1);
+
+            if (winner?.status === "processing") {
+              // Confirmed order — return without re-notifying.
+              logger.info(
+                { orderId: winner.id },
+                "[orders] WC idempotency conflict — returning existing confirmed order",
+              );
+              const winnerItems = await db
+                .select()
+                .from(ucOrderItemsTable)
+                .where(eq(ucOrderItemsTable.orderId, winner.id));
+              res.json({
+                id:              winner.id,
+                status:          winner.status,
+                dateCreated:     winner.dateCreated,
+                total:           winner.total,
+                currency:        winner.currency,
+                paymentMethod:   winner.paymentMethod,
+                shippingAddress: winner.shippingAddress ?? {},
+                discountPercent: winner.discountPercent,
+                discountAmount:  winner.discountAmount,
+                promoCode:       winner.promoCode ?? "",
+                lineItems:       winnerItems.map(i => ({
+                  productId: i.productId,
+                  name:      i.name,
+                  quantity:  i.quantity,
+                  total:     i.total,
+                })),
+              });
+              return;
+            }
+
+            if (winner?.status === "pending-wc") {
+              // A stale "pending-wc" anchor from a previous failed attempt.
+              // Reconcile against WC: if the order exists there, confirm it;
+              // if not, release the anchor so the next retry can try WC fresh.
+              const existingWcOrder = await findWcOrderByRef(paymentReference);
+              if (existingWcOrder) {
+                // WC has the order — atomically claim the confirmation.
+                // Only the request that wins the status transition sends
+                // notifications; concurrent requests skip them and return.
+                // Use the anchor's persisted userId (winner.userId), NOT the
+                // retry caller's identity, to correctly address the customer.
+                const normalized = normalizeOrder(existingWcOrder);
+                const iConfirmed = await confirmWcAnchor(winner.id);
+                if (iConfirmed) sendWcOrderNotifications(normalized, winner.userId);
+                res.json(normalized);
+                return;
+              }
+              // No definitive WC match: anchor may belong to an in-flight
+              // WC create or a genuinely failed one.  Keep it intact so
+              // the next retry can attempt reconciliation again — never base
+              // an anchor deletion on uncertain reconciliation data.
+              res.status(503).json({ error: "Order is being processed, please retry shortly", retryable: true });
+              return;
+            }
+          }
+          logger.error({ err: claimErr }, "[orders] idempotency claim failed before WC");
+          res.status(503).json({ error: "Service temporarily unavailable, please retry", retryable: true });
+          return;
+        }
+      }
+
+      // ── Step 2: Call WooCommerce ─────────────────────────────────────────
       const orderPayload = {
         payment_method: paymentMethod,
         payment_method_title:
@@ -1561,63 +1880,62 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
         ],
         coupon_lines: discountPercent > 0 && promoCode ? [{ code: promoCode }] : [],
       };
-      const orderRes = await fetch(wcUrl("/orders"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(orderPayload),
-      });
-      const order: unknown = await orderRes.json();
-      if (order && typeof order === "object" && "id" in order) {
-        if (discountType === "referral" && promoCode && userEmail) {
-          recordReferralConversion(promoCode, userEmail);
+
+      let wcOrder: Record<string, unknown> | null = null;
+      try {
+        const orderRes = await fetch(wcUrl("/orders"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(orderPayload),
+        });
+        const parsed: unknown = await orderRes.json();
+        if (parsed && typeof parsed === "object" && "id" in parsed) {
+          wcOrder = parsed as Record<string, unknown>;
         }
-        const normalized = normalizeOrder(order as Record<string, unknown>);
-        // Server-side push notification: order confirmed (fire-and-forget)
-        sendPushToUser(
-          orderUserId,
-          "✅ Order confirmed!",
-          `Your order #${normalized["id"] ?? "–"} is being processed.`,
-          { screen: "orders", orderId: String(normalized["id"] ?? "") },
-          "orders"
-        );
-        // SMS + email confirmations (fire-and-forget)
-        getUserContact(orderUserId).then(contact => {
-          if (contact?.phone) {
-            sendSms(contact.phone, orderConfirmationSms({
-              orderId:   normalized["id"] as string | number,
-              total:     String(normalized["total"] ?? "0"),
-              firstName: contact.firstName,
-            }));
+      } catch {
+        // WC call threw — attempt reconciliation below.
+      }
+
+      // ── Step 3b: Reconcile when WC result is uncertain ───────────────────
+      // Inspect each candidate WC order's meta_data for an EXACT reference
+      // match — never accept an unverified first result.
+      // If reconciliation is inconclusive (no match or WC query fails), keep
+      // the anchor intact and return a retriable 503.  Anchors for permanently
+      // failed WC calls are cleaned up by a periodic job.
+      if (!wcOrder && paymentReference) {
+        const reconciled = await findWcOrderByRef(paymentReference);
+        if (reconciled) {
+          wcOrder = reconciled;
+        } else {
+          logger.warn(
+            { paymentReference, wcAnchorId },
+            "[orders] WC call failed; reconciliation inconclusive — anchor retained; client should retry",
+          );
+          res.status(503).json({ error: "Service temporarily unavailable, please retry", retryable: true });
+          return;
+        }
+      }
+
+      if (wcOrder) {
+        // ── Step 3a: Atomic anchor confirmation ──────────────────────────
+        // confirmWcAnchor uses UPDATE WHERE status='pending-wc'; only the
+        // request that wins the transition (returns true) sends notifications.
+        // Concurrent requests that lose skip notifications and return normally.
+        const normalized = normalizeOrder(wcOrder);
+        if (wcAnchorId !== null) {
+          const iConfirmed = await confirmWcAnchor(wcAnchorId);
+          if (iConfirmed) {
+            if (discountType === "referral" && promoCode && userEmail) {
+              recordReferralConversion(promoCode, userEmail);
+            }
+            sendWcOrderNotifications(normalized, orderUserId);
           }
-          if (contact?.email) {
-            const li = (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [];
-            const receipt = buildOrderReceiptEmail({
-              orderId:         normalized["id"] as string | number,
-              firstName:       contact.firstName,
-              email:           contact.email,
-              lineItems:       li,
-              total:           String(normalized["total"] ?? "0"),
-              currency:        String(normalized["currency"] ?? "KES"),
-              paymentMethod:   String(normalized["paymentMethod"] ?? ""),
-              shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
-            });
-            sendViaResend({
-              from:    "orders@contacts.ucfilters.com",
-              to:      contact.email,
-              subject: receipt.subject,
-              text:    receipt.text,
-              html:    receipt.html,
-            }).then(ok => {
-              if (!ok) {
-                logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-                sendEmail({ to: contact.email, ...receipt });
-              }
-            });
-          }
-        }).catch(() => {});
+        }
         res.json(normalized);
         return;
       }
+      // ── WC returned no usable order and reconciliation was skipped ────────
+      // (paymentReference was empty / COD — fall through to DB path)
     }
   } catch { /* fall through to mock */ }
 
@@ -1715,6 +2033,58 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
 
     res.json(newOrder);
   } catch (dbErr) {
+    // ── Unique-constraint violation (concurrent duplicate request) ────────────
+    // Two requests can race through the pre-check and both try to insert.
+    // The loser hits Postgres error 23505. Re-read the winner's row and return
+    // it without sending any additional notification.
+    if (
+      paymentReference &&
+      typeof dbErr === "object" && dbErr !== null &&
+      "code" in dbErr && (dbErr as { code: string }).code === "23505"
+    ) {
+      try {
+        const [winner] = await db
+          .select()
+          .from(ucOrdersTable)
+          .where(and(
+            eq(ucOrdersTable.paymentReference, paymentReference),
+            ne(ucOrdersTable.paymentReference, ""),
+          ))
+          .limit(1);
+        if (winner) {
+          logger.info(
+            { orderId: winner.id },
+            "[orders] unique-constraint race resolved — returning existing order without re-notifying",
+          );
+          const winnerItems = await db
+            .select()
+            .from(ucOrderItemsTable)
+            .where(eq(ucOrderItemsTable.orderId, winner.id));
+          res.json({
+            id:              winner.id,
+            status:          winner.status,
+            dateCreated:     winner.dateCreated,
+            total:           winner.total,
+            currency:        winner.currency,
+            paymentMethod:   winner.paymentMethod,
+            shippingAddress: winner.shippingAddress ?? {},
+            discountPercent: winner.discountPercent,
+            discountAmount:  winner.discountAmount,
+            promoCode:       winner.promoCode ?? "",
+            lineItems:       winnerItems.map(i => ({
+              productId: i.productId,
+              name:      i.name,
+              quantity:  i.quantity,
+              total:     i.total,
+            })),
+          });
+          return;
+        }
+      } catch (rerr) {
+        logger.error({ err: rerr }, "[orders] failed to re-read order after unique-constraint conflict");
+      }
+    }
+
     // DB unavailable — fall back to in-memory so the order is not lost in the response
     console.error("[orders] DB insert failed, using fallback:", dbErr);
     const fallbackOrder = {

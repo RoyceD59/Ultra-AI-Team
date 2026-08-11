@@ -468,6 +468,31 @@ router.post(
 
       res.json({ received: true, orderId: recovered!.id, recovered: true });
     } catch (err) {
+      // ── Unique-constraint violation: concurrent webhook retry ─────────────
+      // Two retries can both miss the existing-order lookup and race to insert.
+      // The loser gets Postgres error 23505.  Re-read the winner's row and
+      // return 200 so Paystack stops retrying rather than getting a 500.
+      if (
+        typeof err === "object" && err !== null &&
+        "code" in err && (err as { code: string }).code === "23505"
+      ) {
+        try {
+          const [winner] = await db
+            .select()
+            .from(ucOrdersTable)
+            .where(eq(ucOrdersTable.paymentReference, reference))
+            .limit(1);
+          if (winner) {
+            console.info(
+              `[Paystack webhook] Concurrent duplicate resolved — existing recovery order ${winner.id}`
+            );
+            res.json({ received: true, orderId: winner.id, recovered: true });
+            return;
+          }
+        } catch (rerr) {
+          console.error("[Paystack webhook] Failed to re-read order after unique-constraint conflict:", rerr);
+        }
+      }
       console.error("[Paystack webhook] DB error:", err);
       // Return 500 so Paystack will retry — better to retry than to lose the event.
       res.status(500).json({ error: "Internal error" });

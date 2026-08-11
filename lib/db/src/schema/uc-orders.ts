@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, text, timestamp, json, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, json, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Persists orders placed through the UC Companion app.
@@ -22,7 +23,13 @@ export const ucOrdersTable = pgTable("uc_orders", {
   // path (customer paid but the app lost connectivity before createOrder fired).
   // Set at insert time — never derived from userId heuristics.
   webhookRecovery:  boolean("webhook_recovery").notNull().default(false),
-});
+}, (t) => [
+  // Partial unique index: prevent duplicate orders for the same payment reference.
+  // Excludes empty strings so that COD orders (no reference) are not affected.
+  uniqueIndex("uc_orders_payment_reference_unique")
+    .on(t.paymentReference)
+    .where(sql`payment_reference != ''`),
+]);
 
 export const ucOrderItemsTable = pgTable("uc_order_items", {
   id:        serial("id").primaryKey(),
