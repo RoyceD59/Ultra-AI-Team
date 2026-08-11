@@ -16,7 +16,7 @@
  *  - Expand / collapse full answer text per entry
  *  - Auto-refresh every 60 s; manual refresh button
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -408,8 +408,24 @@ export default function AlisonFeedbackPage() {
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState('');
   const [filter,         setFilter]         = useState<Filter>('down');
-  const [keywordFilter,  setKeywordFilter]  = useState<string | null>(null);
+  const [keywordFilter,  setKeywordFilter]  = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('keyword') || null;
+  });
   const [exporting,      setExporting]      = useState(false);
+
+  // Keep ?keyword= query param in sync so filtered views are bookmarkable / shareable
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return; }
+    const url = new URL(window.location.href);
+    if (keywordFilter) {
+      url.searchParams.set('keyword', keywordFilter);
+    } else {
+      url.searchParams.delete('keyword');
+    }
+    window.history.replaceState(null, '', url.toString());
+  }, [keywordFilter]);
 
   const load = useCallback(async (
     silent  = false,
@@ -627,7 +643,7 @@ export default function AlisonFeedbackPage() {
           ] as { key: Filter; label: string }[]).map(tab => (
             <button
               key={tab.key}
-              onClick={() => { setFilter(tab.key); setKeywordFilter(null); load(false, token, null); }}
+              onClick={() => { setFilter(tab.key); load(false, token, keywordFilter); }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
                 filter === tab.key
