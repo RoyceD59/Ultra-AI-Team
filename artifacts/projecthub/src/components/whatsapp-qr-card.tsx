@@ -60,7 +60,7 @@ export function WhatsAppQrCard() {
   const { data, isLoading } = useQuery<WaStatus>({
     queryKey: ["whatsapp-status"],
     queryFn: fetchStatus,
-    refetchInterval: pollEnabled ? 3000 : false,
+    refetchInterval: pollEnabled ? 10000 : false,
     staleTime: 0,
     enabled: authed,
   });
