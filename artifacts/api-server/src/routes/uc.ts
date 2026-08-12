@@ -29,10 +29,10 @@ import {
   db,
   ucPushTokensTable, ucEnquiriesTable, ucNotifPrefsTable,
   ucUsersTable, ucOrdersTable, ucOrderItemsTable, ucTicketsTable, ucWaterTestsTable,
-  ucReviewsTable, ucProductMediaTable,
+  ucReviewsTable, ucProductMediaTable, ucNotificationLogTable,
   type ReviewMediaItem, type UcProductMedia,
 } from "@workspace/db";
-import { eq, desc, inArray, and, asc, ne } from "drizzle-orm";
+import { eq, desc, inArray, and, asc, ne, gt } from "drizzle-orm";
 import bcryptjs from "bcryptjs";
 import { logger } from "../lib/logger";
 import {
@@ -1640,11 +1640,185 @@ router.get("/uc/admin/water-tests", async (req: Request, res: Response): Promise
   }
 });
 
+// ─── Admin notification log endpoints ────────────────────────────────────────
+
+/**
+ * GET /api/uc/admin/notification-logs
+ * Returns recent SMS/email send attempts from uc_notification_log.
+ * Accepts optional ?status=failed|sent and ?limit=N (default 100).
+ * Protected by admin auth.
+ */
+router.get("/uc/admin/notification-logs", async (req: Request, res: Response): Promise<void> => {
+  const admin = await isAdminRequest(req.headers["authorization"]);
+  if (!admin) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const statusFilter = typeof req.query["status"] === "string" && req.query["status"].trim()
+      ? req.query["status"].trim()
+      : null;
+    const limit = Math.min(
+      Number(req.query["limit"]) > 0 ? Number(req.query["limit"]) : 100,
+      500,
+    );
+
+    const rows = await db
+      .select()
+      .from(ucNotificationLogTable)
+      .where(statusFilter ? eq(ucNotificationLogTable.status, statusFilter) : undefined)
+      .orderBy(desc(ucNotificationLogTable.sentAt))
+      .limit(limit);
+
+    res.json(rows);
+  } catch (err) {
+    logger.error({ err }, "Failed to load notification logs");
+    res.status(500).json({ error: "Failed to load notification logs" });
+  }
+});
+
+/**
+ * POST /api/uc/admin/notification-logs/:id/retry
+ * Re-sends the notification described by a FAILED log row.
+ * - SMS: re-sends the stored messageBody (full SMS text) to the stored recipient.
+ * - Email: re-sends the stored plain-text body with a human-readable subject
+ *   derived from the template name. The stored messageBody is the full
+ *   plain-text version of the original email (populated by sms.ts / email.ts).
+ * Only rows with status='failed' may be retried.
+ * Protected by admin auth.
+ */
+router.post("/uc/admin/notification-logs/:id/retry", async (req: Request, res: Response): Promise<void> => {
+  const admin = await isAdminRequest(req.headers["authorization"]);
+  if (!admin) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  const logId = Number(req.params["id"]);
+  if (!logId) {
+    res.status(400).json({ error: "Invalid log id" });
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .select()
+      .from(ucNotificationLogTable)
+      .where(eq(ucNotificationLogTable.id, logId))
+      .limit(1);
+
+    if (!row) {
+      res.status(404).json({ error: "Log entry not found" });
+      return;
+    }
+
+    // Only failed notifications make sense to retry.
+    if (row.status !== "failed") {
+      res.status(400).json({ error: "Only failed notifications can be retried" });
+      return;
+    }
+
+    // Guard against retrying a failure already superseded by a later successful
+    // delivery (e.g. Resend fails → sendEmail fallback succeeds).
+    // Use the most specific identity available: entity ID (orderId / ticketId /
+    // testId) when present, or template when not, so an unrelated later message
+    // to the same recipient on a different entity does NOT block the retry.
+    let supersessionWhere;
+    if (row.orderId != null) {
+      supersessionWhere = and(
+        eq(ucNotificationLogTable.channel,   row.channel),
+        eq(ucNotificationLogTable.recipient, row.recipient),
+        eq(ucNotificationLogTable.orderId,   row.orderId),
+        eq(ucNotificationLogTable.status,    "sent"),
+        gt(ucNotificationLogTable.sentAt,    row.sentAt),
+      );
+    } else if (row.ticketId) {
+      supersessionWhere = and(
+        eq(ucNotificationLogTable.channel,   row.channel),
+        eq(ucNotificationLogTable.recipient, row.recipient),
+        eq(ucNotificationLogTable.ticketId,  row.ticketId),
+        eq(ucNotificationLogTable.status,    "sent"),
+        gt(ucNotificationLogTable.sentAt,    row.sentAt),
+      );
+    } else if (row.testId) {
+      supersessionWhere = and(
+        eq(ucNotificationLogTable.channel,   row.channel),
+        eq(ucNotificationLogTable.recipient, row.recipient),
+        eq(ucNotificationLogTable.testId,    row.testId),
+        eq(ucNotificationLogTable.status,    "sent"),
+        gt(ucNotificationLogTable.sentAt,    row.sentAt),
+      );
+    } else if (row.template) {
+      supersessionWhere = and(
+        eq(ucNotificationLogTable.channel,   row.channel),
+        eq(ucNotificationLogTable.recipient, row.recipient),
+        eq(ucNotificationLogTable.template,  row.template),
+        eq(ucNotificationLogTable.status,    "sent"),
+        gt(ucNotificationLogTable.sentAt,    row.sentAt),
+      );
+    }
+    // If no identity anchor is available, skip the supersession check.
+
+    if (supersessionWhere) {
+      const [laterSuccess] = await db
+        .select({ id: ucNotificationLogTable.id })
+        .from(ucNotificationLogTable)
+        .where(supersessionWhere)
+        .limit(1);
+
+      if (laterSuccess) {
+        res.status(409).json({
+          error: "A later successful delivery already exists for this notification — retry is not needed",
+        });
+        return;
+      }
+    }
+
+    if (row.channel === "sms") {
+      // messageBody stores the full SMS text — re-send as-is.
+      sendSms(row.recipient, row.messageBody, {
+        template: row.template || undefined,
+        orderId:  row.orderId ?? undefined,
+        ticketId: row.ticketId ?? undefined,
+        testId:   row.testId ?? undefined,
+      });
+    } else if (row.channel === "email") {
+      // messageBody stores the full plain-text body of the original email.
+      // Derive a human-readable subject from the template name.
+      // Always HTML-escape the body before interpolation to prevent injection.
+      const retrySubject = row.template
+        ? `Ultra Clear — ${row.template.replace(/_/g, " ")} (re-sent)`
+        : "Your Ultra Clear notification (re-sent)";
+      const safeBody    = row.messageBody || "(original message unavailable — please contact support)";
+      const escapedBody = escapeHtml(safeBody);
+      sendEmail({
+        to:       row.recipient,
+        subject:  retrySubject,
+        html:     `<pre style="font-family:Arial,sans-serif;white-space:pre-wrap">${escapedBody}</pre>`,
+        text:     safeBody,
+        template: row.template || undefined,
+        orderId:  row.orderId ?? undefined,
+        ticketId: row.ticketId ?? undefined,
+        testId:   row.testId ?? undefined,
+      });
+    } else {
+      res.status(400).json({ error: `Unknown channel: ${row.channel}` });
+      return;
+    }
+
+    res.json({ ok: true, message: `Retry queued for ${row.channel} to ${row.recipient}` });
+  } catch (err) {
+    logger.error({ err, logId }, "Failed to retry notification");
+    res.status(500).json({ error: "Failed to retry notification" });
+  }
+});
+
 // ─── Push notifications infrastructure ──────────────────────────────────────
 
 /**
  * Verify the Bearer JWT and return a stable user-identity string.
- * Returns "anonymous" when the token is absent, invalid, or unsigned.
+ * Returns "anonymous" when the token is absent, invalid, or unchanged.
  */
 function userIdFromBearer(authHeader: string | undefined): string {
   const claims = verifyToken(authHeader);
@@ -1831,7 +2005,7 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
                 orderId:   existingOrder.id,
                 total:     existingOrder.total,
                 firstName: contact.firstName,
-              }));
+              }), { template: "order_confirmation", orderId: existingOrder.id });
             }
             if (contact?.email) {
               const receipt = buildOrderReceiptEmail({
@@ -1850,8 +2024,9 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
                 subject: receipt.subject,
                 text:    receipt.text,
                 html:    receipt.html,
+                meta:    { template: "order_receipt", orderId: existingOrder.id },
               }).then(ok => {
-                if (!ok) sendEmail({ to: contact.email, ...receipt });
+                if (!ok) sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: existingOrder.id });
               });
             }
           }).catch(() => {});
@@ -1968,7 +2143,7 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           orderId:   normalized["id"] as string | number,
           total:     String(normalized["total"] ?? "0"),
           firstName: contact.firstName,
-        }));
+        }), { template: "order_confirmation", orderId: normalized["id"] as string | number });
       }
       if (contact?.email) {
         const li = (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [];
@@ -1988,10 +2163,11 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           subject: receipt.subject,
           text:    receipt.text,
           html:    receipt.html,
+          meta:    { template: "order_receipt", orderId: normalized["id"] as string | number },
         }).then(ok => {
           if (!ok) {
             logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt });
+            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: normalized["id"] as string | number });
           }
         });
       }
@@ -2268,7 +2444,7 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           orderId:   newOrder.id,
           total:     newOrder.total,
           firstName: contact.firstName,
-        }));
+        }), { template: "order_confirmation", orderId: newOrder.id });
       }
       if (contact?.email) {
         const receipt = buildOrderReceiptEmail({
@@ -2289,10 +2465,11 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           subject: receipt.subject,
           text:    receipt.text,
           html:    receipt.html,
+          meta:    { template: "order_receipt", orderId: newOrder.id },
         }).then(ok => {
           if (!ok) {
             logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt });
+            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: newOrder.id });
           }
         });
       }
@@ -2388,7 +2565,7 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           orderId:   fallbackOrder.id,
           total:     fallbackOrder.total,
           firstName: contact.firstName,
-        }));
+        }), { template: "order_confirmation", orderId: fallbackOrder.id });
       }
       if (contact?.email) {
         const receipt = buildOrderReceiptEmail({
@@ -2409,10 +2586,11 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           subject: receipt.subject,
           text:    receipt.text,
           html:    receipt.html,
+          meta:    { template: "order_receipt", orderId: fallbackOrder.id },
         }).then(ok => {
           if (!ok) {
             logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt });
+            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: fallbackOrder.id });
           }
         });
       }
@@ -2586,19 +2764,26 @@ async function notifyService(subject: string, lines: string[]): Promise<void> {
     to:   SERVICE_EMAIL,
     subject,
     text,
+    meta: { template: "service_notification" },
   });
   if (sent) return;
   console.error(`[service-notify] Resend unavailable for "${subject}" — falling back`);
   sendEmail({
     to: SERVICE_EMAIL, subject, text,
     html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
+    template: "service_notification",
   }).catch(err =>
     console.error(`[service-notify] email failed for "${subject}":`, err instanceof Error ? err.message : err),
   );
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g,  "&amp;")
+    .replace(/</g,  "&lt;")
+    .replace(/>/g,  "&gt;")
+    .replace(/"/g,  "&quot;")
+    .replace(/'/g,  "&#x27;");
 }
 
 /**
@@ -2616,6 +2801,7 @@ export async function notifyOffice(subject: string, lines: string[]): Promise<vo
     to: OFFICE_EMAIL,
     subject,
     text,
+    meta: { template: "office_notification" },
   });
   if (sent) return;
   console.error(`[office-notify] Resend unavailable for "${subject}" — falling back to SendGrid/SMTP`);
@@ -2625,6 +2811,7 @@ export async function notifyOffice(subject: string, lines: string[]): Promise<vo
       subject,
       text,
       html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
+      template: "office_notification",
     });
   } catch (err) {
     console.error(`[office-notify] email failed for "${subject}":`, err instanceof Error ? err.message : err);
@@ -2655,6 +2842,7 @@ async function sendEnquiryEmail(enquiry: {
       "",
       enquiry.message,
     ].join("\n"),
+    meta: { template: "product_enquiry" },
   });
   if (sent) return;
   console.error(`[enquiry] Resend unavailable for "${enquiry.productName}" — falling back to SendGrid/SMTP`);
@@ -2672,6 +2860,7 @@ async function sendEnquiryEmail(enquiry: {
       subject: `New Enquiry: ${enquiry.productName}`,
       text,
       html: `<pre style="font-family:monospace">${escapeHtml(text)}</pre>`,
+      template: "product_enquiry",
     });
   } catch (err) {
     console.error(`[enquiry] email failed for "${enquiry.productName}":`, err instanceof Error ? err.message : err);
@@ -2793,14 +2982,14 @@ router.post("/uc/tickets", async (req: Request, res: Response): Promise<void> =>
       const subject = `New Service Request ${ticketId}: ${productModel}`;
 
       if (contact?.phone) {
-        sendSms(contact.phone, ticketConfirmationSms({ ticketId, firstName: contact.firstName }));
+        sendSms(contact.phone, ticketConfirmationSms({ ticketId, firstName: contact.firstName }), { template: "ticket_confirmation", ticketId });
       }
       if (contact?.email) {
         const receipt = buildTicketConfirmationEmail({
           ticketId, firstName: contact.firstName, email: contact.email,
           productModel: productModel ?? "", issueDescription: issueDescription ?? "",
         });
-        sendEmail({ to: contact.email, ...receipt }).catch(() => {});
+        sendEmail({ to: contact.email, ...receipt, template: "ticket_confirmation", ticketId }).catch(() => {});
       }
       notifyOffice(subject, lines).catch(() => {});
       notifyService(subject, [
@@ -2902,7 +3091,7 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
     const subject = `New Water Test Request ${testId}: ${name}`;
 
     // SMS to the phone number given in the form
-    sendSms(phone!, waterTestConfirmationSms({ testId, address: address!, firstName }));
+    sendSms(phone!, waterTestConfirmationSms({ testId, address: address!, firstName }), { template: "water_test_confirmation", testId });
 
     // Receipt email to submitted address (always, regardless of login)
     const emailTarget = formEmail?.trim() || null;
@@ -2911,7 +3100,7 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
         testId, firstName, email: emailTarget,
         address: address!, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
       });
-      sendEmail({ to: emailTarget, ...receipt }).catch(() => {});
+      sendEmail({ to: emailTarget, ...receipt, template: "water_test_confirmation", testId }).catch(() => {});
     }
 
     // If logged in, also send to registered account email (may differ from form email)
@@ -2921,7 +3110,7 @@ router.post("/uc/water-tests", async (req: Request, res: Response): Promise<void
           testId, firstName: contact.firstName, email: contact.email,
           address: address!, waterSource: waterSource ?? "Municipal", concerns: concerns ?? "",
         });
-        sendEmail({ to: contact.email, ...receipt }).catch(() => {});
+        sendEmail({ to: contact.email, ...receipt, template: "water_test_confirmation", testId }).catch(() => {});
       }
     }).catch(() => {});
 

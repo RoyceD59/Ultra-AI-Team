@@ -48,7 +48,8 @@ function renderTemplate(
 async function sendEmailNotification(
   to: string,
   subject: string,
-  body: string
+  body: string,
+  template?: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { sendEmail } = await import("./email");
@@ -57,6 +58,7 @@ async function sendEmailNotification(
       subject,
       html: body.replace(/\n/g, "<br>"),
       text: body,
+      template,
     });
     return { success: true };
   } catch (err: unknown) {
@@ -134,7 +136,7 @@ export async function dispatchToContact(
   if (preferredMethod?.channelType === "whatsapp") {
     result = await sendWhatsApp(preferredMethod.channelValue, body);
   } else {
-    result = await sendEmailNotification(preferredMethod?.channelValue ?? "", subject, body);
+    result = await sendEmailNotification(preferredMethod?.channelValue ?? "", subject, body, templateId.toLowerCase());
   }
 
   // Fail-safe: fall back to secondary channel
@@ -149,7 +151,7 @@ export async function dispatchToContact(
     if (fallbackMethod.channelType === "whatsapp") {
       result = await sendWhatsApp(fallbackMethod.channelValue, body);
     } else {
-      result = await sendEmailNotification(fallbackMethod.channelValue, subject, body);
+      result = await sendEmailNotification(fallbackMethod.channelValue, subject, body, templateId.toLowerCase());
     }
   }
 

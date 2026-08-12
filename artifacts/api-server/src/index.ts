@@ -183,6 +183,41 @@ async function applyStartupMigrations(): Promise<void> {
       logger.info({ email: adminEmail }, "Startup: seeded initial admin user");
     }
   }
+
+  // Create uc_notification_log table for SMS/email send-attempt auditing.
+  // Run each DDL statement separately so that ALTER TABLE / CREATE INDEX
+  // do not share a single implicit transaction (which would block concurrent
+  // DML for the entire batch).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS uc_notification_log (
+      id             serial       PRIMARY KEY,
+      channel        text         NOT NULL,
+      provider       text         NOT NULL DEFAULT '',
+      recipient      text         NOT NULL,
+      template       text         NOT NULL DEFAULT '',
+      message_body   text         NOT NULL DEFAULT '',
+      order_id       integer,
+      ticket_id      text,
+      test_id        text,
+      status         text         NOT NULL,
+      error_message  text,
+      sent_at        timestamptz  NOT NULL DEFAULT now()
+    )
+  `);
+  // Add provider column to tables that predate this migration.
+  await pool.query(
+    `ALTER TABLE uc_notification_log ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT ''`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS uc_notification_log_status_idx ON uc_notification_log (status)`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS uc_notification_log_sent_at_idx ON uc_notification_log (sent_at)`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS uc_notification_log_provider_idx ON uc_notification_log (provider)`
+  );
+  logger.info("Startup migration: uc_notification_log table ensured");
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
@@ -219,4 +254,3 @@ applyStartupMigrations()
     logger.error({ err }, "Startup migration failed — exiting");
     process.exit(1);
   });
-

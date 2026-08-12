@@ -8,8 +8,13 @@
  * All sends are fire-and-forget. When no credentials are present the
  * function is a silent no-op, so the order/booking flow is never blocked.
  *
+ * Every send attempt (success or failure) is written to uc_notification_log
+ * non-blocking; a DB write error never propagates to the caller.
+ *
  * FROM address: EMAIL_FROM env var, defaults to noreply@ucfilters.co.ke
  */
+
+import { db, ucNotificationLogTable } from "@workspace/db";
 
 const SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send";
 
@@ -40,6 +45,38 @@ function hasSendGrid(): boolean {
 
 function hasSmtp(): boolean {
   return !!(process.env["SMTP_HOST"] && process.env["SMTP_USER"] && process.env["SMTP_PASS"]);
+}
+
+// ─── Notification log helper ──────────────────────────────────────────────────
+
+/** Write a send-attempt row to uc_notification_log. Never throws. */
+function logEmailAttempt(params: {
+  provider:     string;  // 'sendgrid' | 'smtp' | 'resend' | 'none'
+  recipient:    string;
+  template:     string;
+  messageBody:  string;
+  orderId?:     number | string;
+  ticketId?:    string;
+  testId?:      string;
+  status:       "sent" | "failed";
+  errorMessage?: string;
+}): void {
+  db.insert(ucNotificationLogTable)
+    .values({
+      channel:      "email",
+      provider:     params.provider,
+      recipient:    params.recipient,
+      template:     params.template,
+      messageBody:  params.messageBody,
+      orderId:      params.orderId != null ? Number(params.orderId) : undefined,
+      ticketId:     params.ticketId,
+      testId:       params.testId,
+      status:       params.status,
+      errorMessage: params.errorMessage,
+    })
+    .catch((err: unknown) => {
+      console.error("[email] notification log write failed:", err);
+    });
 }
 
 // ─── SendGrid send ────────────────────────────────────────────────────────────
@@ -77,12 +114,35 @@ export async function sendViaSendGrid(
 // We use a minimal raw SMTP-over-HTTP approach via smtp2go / mailgun SMTP proxy.
 // For production, replace this block with nodemailer if added to dependencies.
 
+/**
+ * Optional transport factory injected by unit tests.
+ * When set, `sendViaSmtp` calls this instead of creating a real nodemailer
+ * transporter — allows testing the SendGrid-failure/SMTP-success and
+ * SendGrid-failure/SMTP-failure paths without a live SMTP server.
+ *
+ * @internal — test use only. Never set this in production code.
+ */
+export let _testSmtpTransport: { sendMail: (opts: unknown) => Promise<void> } | null = null;
+export function _testSetSmtpTransport(
+  t: { sendMail: (opts: unknown) => Promise<void> } | null,
+): void {
+  _testSmtpTransport = t;
+}
+
 async function sendViaSmtp(
   to: string,
   subject: string,
   html: string,
   text: string,
 ): Promise<void> {
+  // If a test-injected transport is present, use it directly.
+  if (_testSmtpTransport) {
+    const f = fromAddress();
+    const fromStr = f.name ? `${f.name} <${f.email}>` : f.email;
+    await _testSmtpTransport.sendMail({ from: fromStr, to, subject, text, html });
+    return;
+  }
+
   // Dynamically import nodemailer only if it is installed, to avoid a hard
   // dependency. The indirection through a variable prevents TypeScript from
   // statically checking whether the module exists at compile time.
@@ -92,12 +152,15 @@ async function sendViaSmtp(
     // @ts-ignore — nodemailer is an optional runtime dependency
     nodemailer = await import("nodemailer");
   } catch {
-    console.warn("[email] nodemailer not installed — SMTP send skipped");
-    return;
+    throw new Error("nodemailer not installed — SMTP delivery unavailable");
+  }
+  if (!nodemailer) {
+    throw new Error("nodemailer failed to load — SMTP delivery unavailable");
   }
 
   const port = Number(process.env["SMTP_PORT"] ?? 587);
-  const transporter = nodemailer.createTransport({
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+  const transporter = (nodemailer.default ?? nodemailer).createTransport({
     host:   process.env["SMTP_HOST"]!,
     port,
     secure: port === 465,
@@ -109,6 +172,7 @@ async function sendViaSmtp(
 
   const f = fromAddress();
   const fromStr = f.name ? `${f.name} <${f.email}>` : f.email;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
   await transporter.sendMail({ from: fromStr, to, subject, text, html });
 }
 
@@ -118,17 +182,45 @@ async function sendViaSmtp(
  * Send an email (fire-and-forget).
  * Tries SendGrid first; falls back to SMTP if SendGrid fails or is unconfigured.
  * Silently skips when neither provider is configured.
+ *
+ * Every attempt is written non-blocking to uc_notification_log.
  */
 export async function sendEmail(params: {
-  to:      string;
-  subject: string;
-  html:    string;
-  text:    string;
+  to:       string;
+  subject:  string;
+  html:     string;
+  text:     string;
+  /** Optional metadata for the notification log */
+  template?: string;
+  orderId?:  number | string;
+  ticketId?: string;
+  testId?:   string;
 }): Promise<void> {
   if (!hasSendGrid() && !hasSmtp()) {
     console.log("[email] No provider configured — skipping email to", params.to);
+    logEmailAttempt({
+      provider:     "none",
+      recipient:    params.to,
+      template:     params.template ?? "",
+      messageBody:  params.text,
+      orderId:      params.orderId,
+      ticketId:     params.ticketId,
+      testId:       params.testId,
+      status:       "failed",
+      errorMessage: "No email provider configured (SENDGRID_API_KEY or SMTP_HOST required)",
+    });
     return;
   }
+
+  // Store the full plain-text body so retries can reconstruct a useful message.
+  const logBase = {
+    recipient:   params.to,
+    template:    params.template ?? "",
+    messageBody: params.text,
+    orderId:     params.orderId,
+    ticketId:    params.ticketId,
+    testId:      params.testId,
+  };
 
   // Kick off the delivery chain asynchronously — never blocks the caller.
   (async () => {
@@ -136,9 +228,14 @@ export async function sendEmail(params: {
       try {
         await sendViaSendGrid(params.to, params.subject, params.html, params.text);
         console.log("[email] sent via SendGrid to", params.to);
+        logEmailAttempt({ ...logBase, provider: "sendgrid", status: "sent" });
         return; // success — done
       } catch (sgErr: unknown) {
-        console.warn("[email] SendGrid failed:", sgErr instanceof Error ? sgErr.message : sgErr);
+        const errMsg = sgErr instanceof Error ? sgErr.message : String(sgErr);
+        console.warn("[email] SendGrid failed:", errMsg);
+        // Log the SendGrid failure immediately — every provider attempt is recorded
+        // regardless of whether a fallback provider later succeeds.
+        logEmailAttempt({ ...logBase, provider: "sendgrid", status: "failed", errorMessage: errMsg });
         if (!hasSmtp()) {
           console.error("[email] No SMTP fallback configured — email not delivered to", params.to);
           return;
@@ -147,11 +244,15 @@ export async function sendEmail(params: {
       }
     }
     // Either SendGrid was not configured, or it failed and SMTP is available.
+    // This attempt is logged separately so the log captures every provider tried.
     try {
       await sendViaSmtp(params.to, params.subject, params.html, params.text);
       console.log("[email] sent via SMTP to", params.to);
+      logEmailAttempt({ ...logBase, provider: "smtp", status: "sent" });
     } catch (smtpErr: unknown) {
-      console.error("[email] SMTP also failed:", smtpErr instanceof Error ? smtpErr.message : smtpErr);
+      const errMsg = smtpErr instanceof Error ? smtpErr.message : String(smtpErr);
+      console.error("[email] SMTP also failed:", errMsg);
+      logEmailAttempt({ ...logBase, provider: "smtp", status: "failed", errorMessage: errMsg });
     }
   })();
 }

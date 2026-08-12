@@ -5,9 +5,14 @@
  * All calls are fire-and-forget — errors are logged but never thrown.
  * When credentials are absent the function is a silent no-op.
  *
+ * Every send attempt (success or failure) is written to uc_notification_log
+ * non-blocking; a DB write error never affects the caller.
+ *
  * Africa's Talking SMS API docs:
  * https://developers.africastalking.com/docs/sms/sending
  */
+
+import { db, ucNotificationLogTable } from "@workspace/db";
 
 const AT_BASE = "https://api.africastalking.com/version1/messaging";
 
@@ -30,15 +35,64 @@ function normalisePhone(raw: string): string {
   return stripped;
 }
 
+/** Write a send-attempt row to uc_notification_log. Never throws. */
+function logSmsAttempt(params: {
+  recipient:    string;
+  template:     string;
+  messageBody:  string;
+  orderId?:     number | string;
+  ticketId?:    string;
+  testId?:      string;
+  status:       "sent" | "failed";
+  errorMessage?: string;
+}): void {
+  db.insert(ucNotificationLogTable)
+    .values({
+      channel:      "sms",
+      provider:     "africas_talking",
+      recipient:    params.recipient,
+      template:     params.template,
+      messageBody:  params.messageBody,
+      orderId:      params.orderId != null ? Number(params.orderId) : undefined,
+      ticketId:     params.ticketId,
+      testId:       params.testId,
+      status:       params.status,
+      errorMessage: params.errorMessage,
+    })
+    .catch((err: unknown) => {
+      console.error("[sms] notification log write failed:", err);
+    });
+}
+
 /**
  * Send an SMS via Africa's Talking (fire-and-forget).
  *
  * @param to      Recipient phone number (international or Kenyan local format)
  * @param message SMS body (max 160 chars for single-part; longer auto-splits)
+ * @param meta    Optional metadata written to uc_notification_log
  */
-export async function sendSms(to: string, message: string): Promise<void> {
+export async function sendSms(
+  to: string,
+  message: string,
+  meta?: {
+    template?: string;
+    orderId?:  number | string;
+    ticketId?: string;
+    testId?:   string;
+  },
+): Promise<void> {
   if (!hasATCredentials()) {
     console.log("[sms] AT credentials absent — skipping SMS to", to);
+    logSmsAttempt({
+      recipient:    normalisePhone(to) || to,
+      template:     meta?.template ?? "",
+      messageBody:  message,
+      orderId:      meta?.orderId,
+      ticketId:     meta?.ticketId,
+      testId:       meta?.testId,
+      status:       "failed",
+      errorMessage: "Africa's Talking credentials not configured (AT_API_KEY / AT_USERNAME)",
+    });
     return;
   }
 
@@ -50,6 +104,15 @@ export async function sendSms(to: string, message: string): Promise<void> {
 
   const apiKey   = process.env["AT_API_KEY"]!;
   const username = process.env["AT_USERNAME"]!;
+
+  const logMeta = {
+    recipient:   phone,
+    template:    meta?.template ?? "",
+    messageBody: message,
+    orderId:     meta?.orderId,
+    ticketId:    meta?.ticketId,
+    testId:      meta?.testId,
+  };
 
   // Fire and forget — do NOT await at the call site
   fetch(AT_BASE, {
@@ -70,13 +133,17 @@ export async function sendSms(to: string, message: string): Promise<void> {
       if (!res.ok) {
         const body = await res.text().catch(() => "(unreadable)");
         console.error(`[sms] AT returned ${res.status}:`, body);
+        logSmsAttempt({ ...logMeta, status: "failed", errorMessage: `AT ${res.status}: ${body}` });
       } else {
         const data = await res.json().catch(() => null);
         console.log("[sms] sent to", phone, "—", JSON.stringify(data));
+        logSmsAttempt({ ...logMeta, status: "sent" });
       }
     })
     .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("[sms] network error:", err);
+      logSmsAttempt({ ...logMeta, status: "failed", errorMessage: `Network error: ${msg}` });
     });
 }
 

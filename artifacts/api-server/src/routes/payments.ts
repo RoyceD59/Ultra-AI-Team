@@ -158,6 +158,7 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
           "",
           "Action: check M-Pesa Business Console and fulfil manually if payment received.",
         ].join("\n"),
+        meta: { template: "mpesa_tracking_alert" },
       }).catch(() => {});
       res.status(500).json({ error: "Checkout error — please try again", retryable: true });
       return;
@@ -570,6 +571,7 @@ router.post(
           "",
           "This order is flagged as 'Webhook recovery' in the orders list.",
         ].join("\n"),
+        meta: { template: "payment_recovery_alert", orderId: recovered!.id },
       }).catch(() => { /* already logged inside sendViaResend */ });
 
       res.json({ received: true, orderId: recovered!.id, recovered: true });
@@ -834,6 +836,7 @@ router.post("/payments/mpesa/callback", async (req: Request, res: Response): Pro
           "This order is flagged as 'Webhook recovery' in the orders list.",
           "Status: PENDING (not fulfilled until verified).",
         ].join("\n"),
+        meta: { template: "mpesa_unverified_alert", orderId: unverified!.id },
       }).catch(() => { /* already logged inside sendViaResend */ });
 
       ack({ orderId: unverified!.id, recovered: true, unverified: true });
@@ -888,6 +891,7 @@ router.post("/payments/mpesa/callback", async (req: Request, res: Response): Pro
             subject: receipt.subject,
             html:    receipt.html,
             text:    receipt.text,
+            meta:    { template: "order_receipt", orderId: order.id },
           }).catch(() => { /* already logged inside sendViaResend */ });
         }
 
@@ -979,6 +983,7 @@ router.post("/payments/mpesa/callback", async (req: Request, res: Response): Pro
         "",
         "This order is flagged as 'Webhook recovery' in the orders list.",
       ].join("\n"),
+      meta: { template: "payment_recovery_alert", orderId: recovered!.id },
     }).catch(() => { /* already logged inside sendViaResend */ });
 
     ack({ orderId: recovered!.id, recovered: true });

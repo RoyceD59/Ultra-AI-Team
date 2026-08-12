@@ -197,7 +197,7 @@ async function notifySyncFailure(params: {
 
   const results = await Promise.allSettled(
     members.map((m) =>
-      sendViaResend({ from, to: m.email, subject, text }),
+      sendViaResend({ from, to: m.email, subject, text, meta: { template: "sheet_sync_failure_alert" } }),
     ),
   );
 

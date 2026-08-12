@@ -33,6 +33,7 @@ export * from "./uc-reviews";
 export * from "./uc-product-media";
 export * from "./uc-ai-feedback";
 export * from "./uc-offline-clients";
+export * from "./uc-notification-log";
 // Team Horizon schemas
 export * from "./contacts";
 export * from "./contact-methods";
@@ -45,4 +46,3 @@ export * from "./password-reset-tokens";
 export * from "./sheet-syncs";
 export * from "./google-oauth-credentials";
 export * from "./mpesa-stk-initiations";
-export * from "./team-settings";
