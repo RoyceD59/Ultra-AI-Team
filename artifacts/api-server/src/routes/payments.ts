@@ -111,7 +111,18 @@ router.post("/payments/mpesa", async (req: Request, res: Response): Promise<void
           PartyA: normalizedPhone,
           PartyB: shortcode,
           PhoneNumber: normalizedPhone,
-          CallBackURL: `${process.env["API_BASE_URL"] || "https://team-horizon--jerryaroyce.replit.app"}/api/payments/mpesa/callback`,
+          // SECURITY NOTE: MPESA_WEBHOOK_SECRET is appended as a query parameter
+          // because Safaricom echoes the CallBackURL verbatim; it does not support
+          // custom request headers.  Query-param tokens are visible in HTTP access
+          // logs on intermediate proxies — accept this risk in exchange for the
+          // protection against arbitrary callers forging "paid" callbacks.
+          // The callback handler also accepts Authorization: Bearer <secret> for
+          // curl/Postman testing where you control the headers directly.
+          CallBackURL: (() => {
+              const base = `${process.env["API_BASE_URL"] || "https://team-horizon--jerryaroyce.replit.app"}/api/payments/mpesa/callback`;
+              const secret = process.env["MPESA_WEBHOOK_SECRET"];
+              return secret ? `${base}?token=${encodeURIComponent(secret)}` : base;
+            })(),
           AccountReference: `Order-${orderId}`,
           TransactionDesc: "UC Filter Purchase",
         }),
@@ -680,6 +691,60 @@ router.post("/payments/mpesa/callback", async (req: Request, res: Response): Pro
   // Always ack — Safaricom retries are unreliable on non-200 responses.
   const ack = (extra?: Record<string, unknown>) =>
     res.json({ ResultCode: 0, ResultDesc: "Accepted", ...extra });
+
+  // ── Bearer-token verification ────────────────────────────────────────────
+  // Safaricom does not sign callbacks with HMAC, but it echoes the exact
+  // CallBackURL verbatim (query params included).  We embed a shared secret
+  // as ?token=<MPESA_WEBHOOK_SECRET> when initiating the push, then validate
+  // it here.  An Authorization: Bearer <secret> header is also accepted so
+  // the endpoint can be tested easily from curl/Postman.
+  {
+    const webhookSecret    = process.env["MPESA_WEBHOOK_SECRET"];
+    // Fail-closed in production: if NODE_ENV=production and no secret is set,
+    // treat it as MPESA_WEBHOOK_REQUIRED_SIGNATURE=true so the endpoint never
+    // silently accepts unverified callbacks in a live deployment.
+    const requireSignature =
+      process.env["MPESA_WEBHOOK_REQUIRED_SIGNATURE"] === "true" ||
+      (process.env["NODE_ENV"] === "production" && !webhookSecret);
+
+    if (webhookSecret) {
+      const authHeader  = String(req.headers["authorization"] ?? "");
+      const bearerToken = authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : String(req.query["token"] ?? "");
+
+      if (bearerToken !== webhookSecret) {
+        console.warn(
+          "[M-Pesa callback] ⚠️  Invalid or missing bearer token — request rejected."
+        );
+        res.status(401).json({ error: "Invalid signature" });
+        return;
+      }
+    } else {
+      // MPESA_WEBHOOK_SECRET is not configured — token verification is skipped.
+      // This is acceptable in a local dev/test environment.
+      // In production this is a security risk: any caller can forge "paid" callbacks.
+      console.warn(
+        "[M-Pesa callback] ⚠️  SECURITY WARNING: MPESA_WEBHOOK_SECRET is not set. " +
+          "Callback token verification is DISABLED. " +
+          "Set MPESA_WEBHOOK_SECRET in your environment to enable it. " +
+          "If this is a production deployment, set MPESA_WEBHOOK_REQUIRED_SIGNATURE=true " +
+          "to hard-reject unverified requests."
+      );
+      if (requireSignature) {
+        // Hard-reject: operator has explicitly opted in to strict mode.
+        console.error(
+          "[M-Pesa callback] MPESA_WEBHOOK_REQUIRED_SIGNATURE=true but " +
+            "MPESA_WEBHOOK_SECRET is missing — rejecting request."
+        );
+        res.status(403).json({
+          error:
+            "Webhook signature verification is required but no secret key is configured.",
+        });
+        return;
+      }
+    }
+  }
 
   try {
     const body = req.body as {

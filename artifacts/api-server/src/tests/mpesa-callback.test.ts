@@ -35,6 +35,7 @@ import { eq } from "drizzle-orm";
 // ── Shared state ──────────────────────────────────────────────────────────────
 let realFetch: typeof globalThis.fetch;
 let server: http.Server;
+let savedWebhookSecret: string | undefined;   // cleared in before(), restored in after()
 
 // Unique prefix so parallel/repeated test runs don't collide on payment refs.
 const TEST_PREFIX = `CB_${Date.now()}`;
@@ -46,16 +47,15 @@ const nextRef = () => `${TEST_PREFIX}_${++seq}`;
 async function postCallback(
   body: unknown,
   srv: http.Server = server,
+  opts: { headers?: Record<string, string>; urlSuffix?: string } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const addr = srv.address() as { port: number };
-  const res = await realFetch(
-    `http://localhost:${addr.port}/api/payments/mpesa/callback`,
-    {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(body),
-    },
-  );
+  const url  = `http://localhost:${addr.port}/api/payments/mpesa/callback${opts.urlSuffix ?? ""}`;
+  const res  = await realFetch(url, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
+    body:    JSON.stringify(body),
+  });
   let parsed: Record<string, unknown> = {};
   try { parsed = (await res.json()) as Record<string, unknown>; } catch { /* leave empty */ }
   return { status: res.status, body: parsed };
@@ -158,6 +158,12 @@ async function cleanTestRows(): Promise<void> {
 before(async () => {
   realFetch = globalThis.fetch;
 
+  // Clear MPESA_WEBHOOK_SECRET for the main test suite so the bulk of tests
+  // run without the bearer-token guard.  The token-specific describe blocks
+  // set and restore the value themselves around each test.
+  savedWebhookSecret = process.env["MPESA_WEBHOOK_SECRET"];
+  delete process.env["MPESA_WEBHOOK_SECRET"];
+
   // Fake Daraja credentials activate the verification branch.
   process.env["MPESA_SHORTCODE"]       ??= "174379";
   process.env["MPESA_PASSKEY"]         ??= "test_passkey";
@@ -181,6 +187,9 @@ after(async () => {
     server.close((e) => (e ? reject(e) : resolve())),
   );
   globalThis.fetch = realFetch;
+  // Restore webhook secret to whatever it was before the suite ran.
+  if (savedWebhookSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedWebhookSecret;
+  else delete process.env["MPESA_WEBHOOK_SECRET"];
 });
 
 // ── (a) Non-zero ResultCode → no DB action ───────────────────────────────────
@@ -536,6 +545,192 @@ describe("M-Pesa callback — malformed body", () => {
     const { status, body } = await postCallback({});
     assert.equal(status, 200);
     assert.equal(body["ResultCode"], 0);
+  });
+});
+
+// ── Bearer-token guard tests ──────────────────────────────────────────────────
+// These tests exercise the MPESA_WEBHOOK_SECRET verification added to the
+// callback handler.  Each test sets / clears the env var around a single
+// request and restores it afterwards so other tests are not affected.
+
+describe("M-Pesa callback — bearer-token guard: correct token via query param", () => {
+  it("accepts a request whose ?token= matches MPESA_WEBHOOK_SECRET", async () => {
+    const restore = stubDaraja(null); // Daraja unavailable — we only care about the guard
+    const savedSecret = process.env["MPESA_WEBHOOK_SECRET"];
+    process.env["MPESA_WEBHOOK_SECRET"] = "test-webhook-secret-abc123";
+    try {
+      // Send a minimal body; Daraja unavailable + no initiation → no order created.
+      // The guard must not reject the request (status must not be 401/403).
+      const { status, body } = await postCallback(
+        {},
+        server,
+        { urlSuffix: "?token=test-webhook-secret-abc123" },
+      );
+      assert.notEqual(status, 401, "correct token must not trigger 401");
+      assert.notEqual(status, 403, "correct token must not trigger 403");
+      // Malformed body → acks with ResultCode 0 (guard passed, body handler took over)
+      assert.equal(body["ResultCode"], 0, "guard passed — handler returned its normal ack");
+    } finally {
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+      restore();
+    }
+  });
+});
+
+describe("M-Pesa callback — bearer-token guard: correct token via Authorization header", () => {
+  it("accepts a request whose Authorization: Bearer matches MPESA_WEBHOOK_SECRET", async () => {
+    const restore = stubDaraja(null);
+    const savedSecret = process.env["MPESA_WEBHOOK_SECRET"];
+    process.env["MPESA_WEBHOOK_SECRET"] = "test-webhook-secret-abc123";
+    try {
+      const { status, body } = await postCallback(
+        {},
+        server,
+        { headers: { Authorization: "Bearer test-webhook-secret-abc123" } },
+      );
+      assert.notEqual(status, 401, "correct header token must not trigger 401");
+      assert.notEqual(status, 403, "correct header token must not trigger 403");
+      assert.equal(body["ResultCode"], 0, "guard passed");
+    } finally {
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+      restore();
+    }
+  });
+});
+
+describe("M-Pesa callback — bearer-token guard: wrong token", () => {
+  it("rejects a request whose token does not match MPESA_WEBHOOK_SECRET with 401", async () => {
+    const savedSecret = process.env["MPESA_WEBHOOK_SECRET"];
+    process.env["MPESA_WEBHOOK_SECRET"] = "correct-secret";
+    try {
+      const { status } = await postCallback(
+        {},
+        server,
+        { urlSuffix: "?token=wrong-secret" },
+      );
+      assert.equal(status, 401, "wrong token must be rejected with 401");
+    } finally {
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+    }
+  });
+});
+
+describe("M-Pesa callback — bearer-token guard: missing token when secret is configured", () => {
+  it("rejects a request with no token at all when MPESA_WEBHOOK_SECRET is set", async () => {
+    const savedSecret = process.env["MPESA_WEBHOOK_SECRET"];
+    process.env["MPESA_WEBHOOK_SECRET"] = "correct-secret";
+    try {
+      // No ?token= and no Authorization header
+      const { status } = await postCallback({}, server);
+      assert.equal(status, 401, "missing token must be rejected with 401 when a secret is configured");
+    } finally {
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+    }
+  });
+});
+
+describe("M-Pesa callback — bearer-token guard: MPESA_WEBHOOK_REQUIRED_SIGNATURE=true without secret", () => {
+  it("rejects with 403 when required-signature flag is set but no secret is configured", async () => {
+    const savedSecret = process.env["MPESA_WEBHOOK_SECRET"];
+    const savedRequired = process.env["MPESA_WEBHOOK_REQUIRED_SIGNATURE"];
+    delete process.env["MPESA_WEBHOOK_SECRET"];
+    process.env["MPESA_WEBHOOK_REQUIRED_SIGNATURE"] = "true";
+    try {
+      const { status, body } = await postCallback({}, server);
+      assert.equal(status, 403, "must hard-reject when MPESA_WEBHOOK_REQUIRED_SIGNATURE=true and no secret");
+      assert.ok(typeof body["error"] === "string", "error field must be present");
+    } finally {
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+      if (savedRequired !== undefined) process.env["MPESA_WEBHOOK_REQUIRED_SIGNATURE"] = savedRequired;
+      else delete process.env["MPESA_WEBHOOK_REQUIRED_SIGNATURE"];
+    }
+  });
+});
+
+// ── CallBackURL token embedding test ─────────────────────────────────────────
+// When MPESA_WEBHOOK_SECRET is set, the outgoing STK push must include the
+// secret as ?token= in the CallBackURL so Safaricom echoes it back and the
+// callback handler can verify it.
+
+describe("M-Pesa initiation — CallBackURL token embedding", () => {
+  it("includes ?token=<MPESA_WEBHOOK_SECRET> in the CallBackURL sent to Daraja", async () => {
+    const savedSecret  = process.env["MPESA_WEBHOOK_SECRET"];
+    const savedKey     = process.env["MPESA_CONSUMER_KEY"];
+    const savedSec     = process.env["MPESA_CONSUMER_SECRET"];
+    const savedShort   = process.env["MPESA_SHORTCODE"];
+    const savedPass    = process.env["MPESA_PASSKEY"];
+
+    const testSecret = "url-token-embed-test-secret-xyz";
+    process.env["MPESA_WEBHOOK_SECRET"]   = testSecret;
+    process.env["MPESA_CONSUMER_KEY"]     = "test_key";
+    process.env["MPESA_CONSUMER_SECRET"]  = "test_secret";
+    process.env["MPESA_SHORTCODE"]        = "174379";
+    process.env["MPESA_PASSKEY"]          = "test_passkey";
+
+    let capturedCallbackUrl: string | undefined;
+
+    // Stub fetch to capture the STK push body sent to Daraja
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/oauth/v1/generate")) {
+        return new Response(JSON.stringify({ access_token: "stub_token" }), { status: 200 });
+      }
+      if (u.includes("/stkpush/v1/processrequest")) {
+        // Capture the CallBackURL from the body Daraja would receive
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, string>;
+        capturedCallbackUrl = body["CallBackURL"];
+        // Return a successful Daraja response
+        return new Response(JSON.stringify({
+          MerchantRequestID: "MR-TEST",
+          CheckoutRequestID: `CB_TOKEN_TEST_${Date.now()}`,
+          ResponseCode: "0",
+          ResponseDescription: "Success",
+          CustomerMessage: "Please check your phone",
+        }), { status: 200 });
+      }
+      // DB migrations / other calls
+      return origFetch(String(url), init);
+    };
+
+    try {
+      const addr = (server.address() as { port: number });
+      const res = await realFetch(
+        `http://localhost:${addr.port}/api/payments/mpesa`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ phone: "0712345678", amount: 1000, orderId: "TOKEN-URL-TEST" }),
+        },
+      );
+      assert.equal(res.status, 200, "STK push endpoint must return 200");
+
+      assert.ok(
+        capturedCallbackUrl !== undefined,
+        "CallBackURL must have been captured from the Daraja request",
+      );
+      assert.ok(
+        capturedCallbackUrl!.includes(`token=${encodeURIComponent(testSecret)}`),
+        `CallBackURL must include the encoded MPESA_WEBHOOK_SECRET token. Got: ${capturedCallbackUrl}`,
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+      if (savedSecret !== undefined) process.env["MPESA_WEBHOOK_SECRET"] = savedSecret;
+      else delete process.env["MPESA_WEBHOOK_SECRET"];
+      if (savedKey  !== undefined) process.env["MPESA_CONSUMER_KEY"]    = savedKey;
+      else delete process.env["MPESA_CONSUMER_KEY"];
+      if (savedSec  !== undefined) process.env["MPESA_CONSUMER_SECRET"] = savedSec;
+      else delete process.env["MPESA_CONSUMER_SECRET"];
+      if (savedShort !== undefined) process.env["MPESA_SHORTCODE"]      = savedShort;
+      else delete process.env["MPESA_SHORTCODE"];
+      if (savedPass !== undefined) process.env["MPESA_PASSKEY"]         = savedPass;
+      else delete process.env["MPESA_PASSKEY"];
+    }
   });
 });
 
