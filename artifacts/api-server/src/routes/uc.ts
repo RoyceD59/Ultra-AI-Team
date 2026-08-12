@@ -1512,9 +1512,14 @@ router.get("/uc/admin/orders", async (req: Request, res: Response): Promise<void
   }
 
   try {
+    const statusFilter = typeof req.query["status"] === "string" && req.query["status"].trim()
+      ? req.query["status"].trim()
+      : null;
+
     const orders = await db
       .select()
       .from(ucOrdersTable)
+      .where(statusFilter ? eq(ucOrdersTable.status, statusFilter) : undefined)
       .orderBy(desc(ucOrdersTable.dateCreated));
 
     if (orders.length === 0) {
@@ -1556,6 +1561,82 @@ router.get("/uc/admin/orders", async (req: Request, res: Response): Promise<void
   } catch (err) {
     logger.error({ err }, "Failed to load admin orders");
     res.status(500).json({ error: "Failed to load orders" });
+  }
+});
+
+// GET /api/uc/admin/tickets — all maintenance tickets, most-recent first.
+// Accepts optional ?status= filter. Protected by admin auth.
+router.get("/uc/admin/tickets", async (req: Request, res: Response): Promise<void> => {
+  const admin = await isAdminRequest(req.headers["authorization"]);
+  if (!admin) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const statusFilter = typeof req.query["status"] === "string" && req.query["status"].trim()
+      ? req.query["status"].trim()
+      : null;
+
+    const tickets = await db
+      .select()
+      .from(ucTicketsTable)
+      .where(statusFilter ? eq(ucTicketsTable.status, statusFilter) : undefined)
+      .orderBy(desc(ucTicketsTable.createdAt));
+
+    res.json(tickets.map(t => ({
+      id:                   t.id,
+      userId:               t.userId,
+      productModel:         t.productModel,
+      issueDescription:     t.issueDescription,
+      preferredContactTime: t.preferredContactTime,
+      photos:               t.photos ?? [],
+      videos:               t.videos ?? [],
+      status:               t.status,
+      createdAt:            t.createdAt,
+    })));
+  } catch (err) {
+    logger.error({ err }, "Failed to load admin tickets");
+    res.status(500).json({ error: "Failed to load tickets" });
+  }
+});
+
+// GET /api/uc/admin/water-tests — all water test bookings, most-recent first.
+// Accepts optional ?status= filter. Protected by admin auth.
+router.get("/uc/admin/water-tests", async (req: Request, res: Response): Promise<void> => {
+  const admin = await isAdminRequest(req.headers["authorization"]);
+  if (!admin) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const statusFilter = typeof req.query["status"] === "string" && req.query["status"].trim()
+      ? req.query["status"].trim()
+      : null;
+
+    const waterTests = await db
+      .select()
+      .from(ucWaterTestsTable)
+      .where(statusFilter ? eq(ucWaterTestsTable.status, statusFilter) : undefined)
+      .orderBy(desc(ucWaterTestsTable.createdAt));
+
+    res.json(waterTests.map(w => ({
+      id:          w.id,
+      userId:      w.userId,
+      name:        w.name,
+      address:     w.address,
+      phone:       w.phone,
+      waterSource: w.waterSource,
+      concerns:    w.concerns,
+      photos:      w.photos ?? [],
+      videos:      w.videos ?? [],
+      status:      w.status,
+      createdAt:   w.createdAt,
+    })));
+  } catch (err) {
+    logger.error({ err }, "Failed to load admin water tests");
+    res.status(500).json({ error: "Failed to load water tests" });
   }
 });
 
