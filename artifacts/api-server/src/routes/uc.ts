@@ -2127,21 +2127,60 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
   const netTotal = gross - discountAmount;
 
   // ── WC order reconciliation helper ─────────────────────────────────────────
-  // Fetches a page of recent WC orders and inspects each one's meta_data array
-  // for an EXACT payment_reference match — never trusts a first-result shortcut.
-  // Returns the matching WC order or null (also null when the WC query fails).
-  async function findWcOrderByRef(ref: string): Promise<Record<string, unknown> | null> {
-    const orders = await wcFetchArray("/orders", { per_page: "25", status: "any" });
-    if (!orders) return null;
-    for (const o of orders) {
-      const meta = o["meta_data"];
-      if (!Array.isArray(meta)) continue;
-      const found = (meta as Array<Record<string, unknown>>).some(
-        m => m["key"] === "payment_reference" && m["value"] === ref
-      );
-      if (found) return o;
+  // Paginates through recent WC orders (newest first) to find one carrying an
+  // exact payment_reference match in meta_data.  We do NOT rely on WooCommerce's
+  // meta_key/meta_value collection filter — that parameter is not part of the
+  // documented WC REST API v3 spec and may be silently ignored on many
+  // installations, causing unfiltered results that a secondary scan would
+  // incorrectly treat as "not_found" and proceed to POST a duplicate.
+  //
+  // Instead we paginate deterministically through up to MAX_PAGES pages so that
+  // "not_found" only fires after exhausting all pages — a reliable confirmed
+  // absence within a practical order-volume bound.
+  //
+  // Returns a tri-state so callers can distinguish a confirmed absence from a
+  // lookup failure:
+  //   { status: "found",     order }  — exact match in WC
+  //   { status: "not_found" }         — all pages exhausted; reference not in WC
+  //   { status: "error" }             — WC query itself failed (network / creds)
+  type WcLookupResult =
+    | { status: "found"; order: Record<string, unknown> }
+    | { status: "not_found" }
+    | { status: "error" };
+
+  async function findWcOrderByRef(ref: string): Promise<WcLookupResult> {
+    const PER_PAGE = 100;
+    const MAX_PAGES = 5; // up to 500 orders before failing closed
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const orders = await wcFetchArray("/orders", {
+        per_page: String(PER_PAGE),
+        page:     String(page),
+        status:   "any",
+        orderby:  "date",
+        order:    "desc",
+      });
+
+      if (orders === null) return { status: "error" };
+
+      for (const o of orders) {
+        const meta = o["meta_data"];
+        if (!Array.isArray(meta)) continue;
+        const found = (meta as Array<Record<string, unknown>>).some(
+          m => m["key"] === "payment_reference" && m["value"] === ref
+        );
+        if (found) return { status: "found", order: o };
+      }
+
+      // A page shorter than PER_PAGE is the terminal page — we have seen every
+      // WC order and can confirm the reference is absent.
+      if (orders.length < PER_PAGE) return { status: "not_found" };
     }
-    return null;
+
+    // We reached the scan limit (MAX_PAGES × PER_PAGE) without a terminal short
+    // page, so there may be additional WC orders beyond our window.  We cannot
+    // confirm absence — fail closed to prevent a duplicate POST.
+    return { status: "error" };
   }
 
   // ── WC confirmation helper ──────────────────────────────────────────────────
@@ -2288,24 +2327,24 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
             if (winner?.status === "pending-wc") {
               // A stale "pending-wc" anchor from a previous failed attempt.
               // Reconcile against WC: if the order exists there, confirm it;
-              // if not, release the anchor so the next retry can try WC fresh.
-              const existingWcOrder = await findWcOrderByRef(paymentReference);
-              if (existingWcOrder) {
+              // if not (or the query itself fails), keep the anchor intact so
+              // the next retry can attempt reconciliation again — never delete
+              // an anchor on uncertain data.
+              const wcLookup = await findWcOrderByRef(paymentReference);
+              if (wcLookup.status === "found") {
                 // WC has the order — atomically claim the confirmation.
                 // Only the request that wins the status transition sends
                 // notifications; concurrent requests skip them and return.
                 // Use the anchor's persisted userId (winner.userId), NOT the
                 // retry caller's identity, to correctly address the customer.
-                const normalized = normalizeOrder(existingWcOrder);
+                const normalized = normalizeOrder(wcLookup.order);
                 const iConfirmed = await confirmWcAnchor(winner.id);
                 if (iConfirmed) sendWcOrderNotifications(normalized, winner.userId);
                 res.json(normalized);
                 return;
               }
-              // No definitive WC match: anchor may belong to an in-flight
-              // WC create or a genuinely failed one.  Keep it intact so
-              // the next retry can attempt reconciliation again — never base
-              // an anchor deletion on uncertain reconciliation data.
+              // "not_found" or "error" — both mean we cannot confirm the anchor.
+              // Keep it intact so the next retry can attempt reconciliation again.
               res.status(503).json({ error: "Order is being processed, please retry shortly", retryable: true });
               return;
             }
@@ -2314,6 +2353,52 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
           res.status(503).json({ error: "Service temporarily unavailable, please retry", retryable: true });
           return;
         }
+      }
+
+      // ── WC pre-flight deduplication check ────────────────────────────────
+      // Before POSTing to WooCommerce, query it for an existing order that
+      // already carries this payment_reference in meta_data.  This covers the
+      // scenario where the DB was briefly unavailable on a prior attempt so the
+      // DB guard did not fire, but WC already accepted the order — without this
+      // guard a retry would POST a second WC order for the same payment.
+      //
+      // Tri-state handling:
+      //   "found"     → skip POST, confirm anchor, return normalised order.
+      //   "not_found" → safe to proceed with POST (WC confirmed no match).
+      //   "error"     → fail closed: retain anchor, return retriable 503.
+      //                 A WC lookup failure is indistinguishable from "order
+      //                 exists but temporarily unreachable" — proceeding would
+      //                 risk a duplicate POST.
+      if (paymentReference) {
+        const wcPreFlight = await findWcOrderByRef(paymentReference);
+        if (wcPreFlight.status === "found") {
+          logger.info(
+            { paymentReference, wcAnchorId },
+            "[orders] WC pre-flight: existing WC order found — skipping POST",
+          );
+          const normalized = normalizeOrder(wcPreFlight.order);
+          if (wcAnchorId !== null) {
+            const iConfirmed = await confirmWcAnchor(wcAnchorId);
+            if (iConfirmed) {
+              if (discountType === "referral" && promoCode && userEmail) {
+                recordReferralConversion(promoCode, userEmail);
+              }
+              sendWcOrderNotifications(normalized, orderUserId);
+            }
+          }
+          res.json(normalized);
+          return;
+        }
+        if (wcPreFlight.status === "error") {
+          // WC is unreachable — fail closed to prevent a duplicate POST.
+          logger.warn(
+            { paymentReference, wcAnchorId },
+            "[orders] WC pre-flight: lookup failed — failing closed, client should retry",
+          );
+          res.status(503).json({ error: "Service temporarily unavailable, please retry", retryable: true });
+          return;
+        }
+        // status: "not_found" — WC confirmed no existing order; safe to POST.
       }
 
       // ── Step 2: Call WooCommerce ─────────────────────────────────────────
@@ -2350,18 +2435,18 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       }
 
       // ── Step 3b: Reconcile when WC result is uncertain ───────────────────
-      // Inspect each candidate WC order's meta_data for an EXACT reference
-      // match — never accept an unverified first result.
-      // If reconciliation is inconclusive (no match or WC query fails), keep
-      // the anchor intact and return a retriable 503.  Anchors for permanently
-      // failed WC calls are cleaned up by a periodic job.
+      // Uses the targeted meta_key/meta_value query; secondary exact-match scan
+      // guards against partial WC filtering.
+      // Tri-state: "found" → use reconciled order; "not_found" or "error" →
+      // keep anchor intact and return a retriable 503 — both states mean we
+      // cannot safely confirm that WC did not create an order.
       if (!wcOrder && paymentReference) {
         const reconciled = await findWcOrderByRef(paymentReference);
-        if (reconciled) {
-          wcOrder = reconciled;
+        if (reconciled.status === "found") {
+          wcOrder = reconciled.order;
         } else {
           logger.warn(
-            { paymentReference, wcAnchorId },
+            { paymentReference, wcAnchorId, reconcileStatus: reconciled.status },
             "[orders] WC call failed; reconciliation inconclusive — anchor retained; client should retry",
           );
           res.status(503).json({ error: "Service temporarily unavailable, please retry", retryable: true });
