@@ -131,6 +131,65 @@ describe("buildOrderReceiptEmail — discount and promo code", () => {
   });
 });
 
+// ─── (b2) HTML template — missing/undefined line-item fields ─────────────────
+
+describe("buildOrderReceiptEmail — missing line-item fields", () => {
+  it("renders '—' for a missing name instead of 'undefined'", async () => {
+    const { buildOrderReceiptEmail } = await import("../lib/email.js");
+    const { html, text } = buildOrderReceiptEmail({
+      ...SAMPLE_ORDER,
+      lineItems: [{ quantity: 1, total: "3499" }],
+    });
+    assert.ok(!html.includes("undefined"), "HTML must not contain the word 'undefined'");
+    assert.ok(!text.includes("undefined"), "text must not contain the word 'undefined'");
+    assert.ok(html.includes("—"), "HTML must show fallback '—' for missing name");
+    assert.ok(text.includes("—"), "text must show fallback '—' for missing name");
+  });
+
+  it("renders '—' for a missing total instead of 'undefined'", async () => {
+    const { buildOrderReceiptEmail } = await import("../lib/email.js");
+    const { html, text } = buildOrderReceiptEmail({
+      ...SAMPLE_ORDER,
+      lineItems: [{ name: "Hydra Flux", quantity: 1 }],
+    });
+    assert.ok(!html.includes("undefined"), "HTML must not contain 'undefined'");
+    assert.ok(!text.includes("undefined"), "text must not contain 'undefined'");
+    assert.ok(html.includes("—"), "HTML must show fallback '—' for missing total");
+    assert.ok(text.includes("—"), "text must show fallback '—' for missing total");
+  });
+
+  it("renders '—' for a missing quantity instead of 'undefined'", async () => {
+    const { buildOrderReceiptEmail } = await import("../lib/email.js");
+    const { html, text } = buildOrderReceiptEmail({
+      ...SAMPLE_ORDER,
+      lineItems: [{ name: "Hydra Flux", total: "3499" }],
+    });
+    assert.ok(!html.includes("undefined"), "HTML must not contain 'undefined'");
+    assert.ok(!text.includes("undefined"), "text must not contain 'undefined'");
+  });
+
+  it("renders '—' for all fields when an entirely empty line item is present", async () => {
+    const { buildOrderReceiptEmail } = await import("../lib/email.js");
+    const { html, text } = buildOrderReceiptEmail({
+      ...SAMPLE_ORDER,
+      lineItems: [{}],
+    });
+    assert.ok(!html.includes("undefined"), "HTML must not contain 'undefined'");
+    assert.ok(!text.includes("undefined"), "text must not contain 'undefined'");
+    // At least one '—' must appear in both outputs
+    assert.ok(html.includes("—"), "HTML must use fallback '—'");
+    assert.ok(text.includes("—"), "text must use fallback '—'");
+  });
+
+  it("still renders normally when all fields are present", async () => {
+    const { buildOrderReceiptEmail } = await import("../lib/email.js");
+    const { html } = buildOrderReceiptEmail(SAMPLE_ORDER);
+    assert.ok(html.includes("Hydra Flux"),      "product name must appear");
+    assert.ok(html.includes("3,499") || html.includes("3499"), "product total must appear");
+    assert.ok(!html.includes("undefined"),       "must not contain 'undefined'");
+  });
+});
+
 // ─── (c) sendViaResend — success path ────────────────────────────────────────
 
 describe("sendViaResend — success", () => {

@@ -368,7 +368,7 @@ export function buildOrderReceiptEmail(params: {
   orderId:   string | number;
   firstName: string;
   email:     string;
-  lineItems: Array<{ name: string; quantity: number; total: string }>;
+  lineItems: Array<{ name?: string; quantity?: number; total?: string }>;
   total:     string;
   currency:  string;
   paymentMethod: string;
@@ -406,12 +406,16 @@ export function buildOrderReceiptEmail(params: {
 
   const itemsHtml = lineItems
     .map(
-      (i) =>
-        `<tr>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${i.name}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${i.quantity}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;">${fmt(i.total)}</td>
-        </tr>`
+      (i) => {
+        const safeName  = i.name     != null && i.name     !== "" ? i.name               : "—";
+        const safeQty   = i.quantity != null                      ? String(i.quantity)   : "—";
+        const safeTotal = i.total    != null && i.total    !== "" ? fmt(i.total)         : "—";
+        return `<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${safeName}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${safeQty}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;">${safeTotal}</td>
+        </tr>`;
+      }
     )
     .join("\n");
 
@@ -525,7 +529,12 @@ export function buildOrderReceiptEmail(params: {
     `Delivery to: ${addrText}`,
     "",
     "Items:",
-    ...lineItems.map((i) => `  ${i.name} x${i.quantity} — ${fmt(i.total)}`),
+    ...lineItems.map((i) => {
+      const safeName  = i.name     != null && i.name     !== "" ? i.name           : "—";
+      const safeQty   = i.quantity != null                      ? `x${i.quantity}` : "x—";
+      const safeTotal = i.total    != null && i.total    !== "" ? fmt(i.total)     : "—";
+      return `  ${safeName} ${safeQty} — ${safeTotal}`;
+    }),
     ...(discountAmount && discountAmount > 0
       ? [`  Discount${promoCode ? ` (${promoCode})` : ""}: -${fmt(discountAmount)}`]
       : []),
