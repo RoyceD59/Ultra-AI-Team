@@ -89,6 +89,12 @@
           "androidMode": "default",
           "androidCollapsedTitle": "Ultra-Clear"
         }
+      ],
+      [
+        "react-native-maps",
+        {
+          "googleMapsApiKey": "$GOOGLE_MAPS_ANDROID_KEY"
+        }
       ]
     ],
     "experiments": {
