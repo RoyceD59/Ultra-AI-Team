@@ -1920,6 +1920,66 @@ async function getUserContact(
   }
 }
 
+// ─── Order confirmation email helper ─────────────────────────────────────────
+/**
+ * Fire-and-forget: look up the user's contact details from the DB and send an
+ * order-confirmation email via Resend (falling back to the legacy SMTP provider
+ * when Resend fails).  Exported so integration tests can call it directly.
+ *
+ * Never throws — all errors are logged and swallowed so a notification failure
+ * can never prevent an order response from reaching the client.
+ */
+export function sendOrderConfirmationEmail(
+  ownerUserId: string,
+  order: {
+    orderId:         string | number;
+    lineItems:       Array<{ name?: string; quantity?: number; total?: string }>;
+    total:           string;
+    currency:        string;
+    paymentMethod:   string;
+    shippingAddress?: Record<string, string>;
+    discountAmount?:  number;
+    promoCode?:       string;
+  },
+): void {
+  getUserContact(ownerUserId).then(contact => {
+    if (contact?.phone) {
+      sendSms(contact.phone, orderConfirmationSms({
+        orderId:   order.orderId,
+        total:     order.total,
+        firstName: contact.firstName,
+      }), { template: "order_confirmation", orderId: order.orderId });
+    }
+    if (contact?.email) {
+      const receipt = buildOrderReceiptEmail({
+        orderId:         order.orderId,
+        firstName:       contact.firstName,
+        email:           contact.email,
+        lineItems:       order.lineItems,
+        total:           order.total,
+        currency:        order.currency,
+        paymentMethod:   order.paymentMethod,
+        shippingAddress: order.shippingAddress,
+        discountAmount:  order.discountAmount,
+        promoCode:       order.promoCode,
+      });
+      sendViaResend({
+        from:    "orders@contacts.ucfilters.com",
+        to:      contact.email,
+        subject: receipt.subject,
+        text:    receipt.text,
+        html:    receipt.html,
+        meta:    { template: "order_receipt", orderId: order.orderId },
+      }).then(ok => {
+        if (!ok) {
+          logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
+          sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: order.orderId });
+        }
+      });
+    }
+  }).catch(() => {});
+}
+
 // ─── Orders ──────────────────────────────────────────────────────────────────
 router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => {
   // Capture the caller's identity up-front so we can send a push notification
@@ -1999,37 +2059,14 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
             quantity: i.quantity,
             total:    i.total,
           }));
-          getUserContact(orderUserId).then(contact => {
-            if (contact?.phone) {
-              sendSms(contact.phone, orderConfirmationSms({
-                orderId:   existingOrder.id,
-                total:     existingOrder.total,
-                firstName: contact.firstName,
-              }), { template: "order_confirmation", orderId: existingOrder.id });
-            }
-            if (contact?.email) {
-              const receipt = buildOrderReceiptEmail({
-                orderId:         existingOrder.id,
-                firstName:       contact.firstName,
-                email:           contact.email,
-                lineItems:       li,
-                total:           existingOrder.total,
-                currency:        existingOrder.currency,
-                paymentMethod:   existingOrder.paymentMethod,
-                shippingAddress: existingOrder.shippingAddress as Record<string, string> | undefined,
-              });
-              sendViaResend({
-                from:    "orders@contacts.ucfilters.com",
-                to:      contact.email,
-                subject: receipt.subject,
-                text:    receipt.text,
-                html:    receipt.html,
-                meta:    { template: "order_receipt", orderId: existingOrder.id },
-              }).then(ok => {
-                if (!ok) sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: existingOrder.id });
-              });
-            }
-          }).catch(() => {});
+          sendOrderConfirmationEmail(orderUserId, {
+            orderId:       existingOrder.id,
+            lineItems:     li,
+            total:         existingOrder.total,
+            currency:      existingOrder.currency,
+            paymentMethod: existingOrder.paymentMethod,
+            shippingAddress: existingOrder.shippingAddress as Record<string, string> | undefined,
+          });
         }
 
         res.json({
@@ -2137,41 +2174,14 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       { screen: "orders", orderId: String(normalized["id"] ?? "") },
       "orders"
     );
-    getUserContact(ownerUserId).then(contact => {
-      if (contact?.phone) {
-        sendSms(contact.phone, orderConfirmationSms({
-          orderId:   normalized["id"] as string | number,
-          total:     String(normalized["total"] ?? "0"),
-          firstName: contact.firstName,
-        }), { template: "order_confirmation", orderId: normalized["id"] as string | number });
-      }
-      if (contact?.email) {
-        const li = (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [];
-        const receipt = buildOrderReceiptEmail({
-          orderId:         normalized["id"] as string | number,
-          firstName:       contact.firstName,
-          email:           contact.email,
-          lineItems:       li,
-          total:           String(normalized["total"] ?? "0"),
-          currency:        String(normalized["currency"] ?? "KES"),
-          paymentMethod:   String(normalized["paymentMethod"] ?? ""),
-          shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
-        });
-        sendViaResend({
-          from:    "orders@contacts.ucfilters.com",
-          to:      contact.email,
-          subject: receipt.subject,
-          text:    receipt.text,
-          html:    receipt.html,
-          meta:    { template: "order_receipt", orderId: normalized["id"] as string | number },
-        }).then(ok => {
-          if (!ok) {
-            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: normalized["id"] as string | number });
-          }
-        });
-      }
-    }).catch(() => {});
+    sendOrderConfirmationEmail(ownerUserId, {
+      orderId:       normalized["id"] as string | number,
+      lineItems:     (normalized["lineItems"] as Array<{ name: string; quantity: number; total: string }> | undefined) ?? [],
+      total:         String(normalized["total"] ?? "0"),
+      currency:      String(normalized["currency"] ?? "KES"),
+      paymentMethod: String(normalized["paymentMethod"] ?? ""),
+      shippingAddress: normalized["shippingAddress"] as Record<string, string> | undefined,
+    });
   }
 
   try {
@@ -2373,6 +2383,14 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
             }
             sendWcOrderNotifications(normalized, orderUserId);
           }
+        } else {
+          // COD order (no payment reference → no anchor).  There is no
+          // concurrent-request race for reference-less orders, so send
+          // the confirmation unconditionally whenever WC accepts the order.
+          if (discountType === "referral" && promoCode && userEmail) {
+            recordReferralConversion(promoCode, userEmail);
+          }
+          sendWcOrderNotifications(normalized, orderUserId);
         }
         res.json(normalized);
         return;
@@ -2438,42 +2456,16 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       "orders"
     );
     // SMS + email confirmations (fire-and-forget)
-    getUserContact(orderUserId).then(contact => {
-      if (contact?.phone) {
-        sendSms(contact.phone, orderConfirmationSms({
-          orderId:   newOrder.id,
-          total:     newOrder.total,
-          firstName: contact.firstName,
-        }), { template: "order_confirmation", orderId: newOrder.id });
-      }
-      if (contact?.email) {
-        const receipt = buildOrderReceiptEmail({
-          orderId:         newOrder.id,
-          firstName:       contact.firstName,
-          email:           contact.email,
-          lineItems:       newOrder.lineItems,
-          total:           newOrder.total,
-          currency:        newOrder.currency,
-          paymentMethod:   newOrder.paymentMethod,
-          shippingAddress: newOrder.shippingAddress as Record<string, string> | undefined,
-          discountAmount:  newOrder.discountAmount,
-          promoCode:       newOrder.promoCode,
-        });
-        sendViaResend({
-          from:    "orders@contacts.ucfilters.com",
-          to:      contact.email,
-          subject: receipt.subject,
-          text:    receipt.text,
-          html:    receipt.html,
-          meta:    { template: "order_receipt", orderId: newOrder.id },
-        }).then(ok => {
-          if (!ok) {
-            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: newOrder.id });
-          }
-        });
-      }
-    }).catch(() => {});
+    sendOrderConfirmationEmail(orderUserId, {
+      orderId:         newOrder.id,
+      lineItems:       newOrder.lineItems,
+      total:           newOrder.total,
+      currency:        newOrder.currency,
+      paymentMethod:   newOrder.paymentMethod,
+      shippingAddress: newOrder.shippingAddress as Record<string, string> | undefined,
+      discountAmount:  newOrder.discountAmount,
+      promoCode:       newOrder.promoCode,
+    });
 
     res.json(newOrder);
   } catch (dbErr) {
@@ -2559,42 +2551,16 @@ router.post("/uc/orders", async (req: Request, res: Response): Promise<void> => 
       "orders"
     );
     // SMS + email confirmations (fire-and-forget, fallback path)
-    getUserContact(orderUserId).then(contact => {
-      if (contact?.phone) {
-        sendSms(contact.phone, orderConfirmationSms({
-          orderId:   fallbackOrder.id,
-          total:     fallbackOrder.total,
-          firstName: contact.firstName,
-        }), { template: "order_confirmation", orderId: fallbackOrder.id });
-      }
-      if (contact?.email) {
-        const receipt = buildOrderReceiptEmail({
-          orderId:         fallbackOrder.id,
-          firstName:       contact.firstName,
-          email:           contact.email,
-          lineItems:       fallbackOrder.lineItems,
-          total:           fallbackOrder.total,
-          currency:        fallbackOrder.currency,
-          paymentMethod:   fallbackOrder.paymentMethod,
-          shippingAddress: fallbackOrder.shippingAddress as Record<string, string> | undefined,
-          discountAmount:  fallbackOrder.discountAmount,
-          promoCode:       fallbackOrder.promoCode,
-        });
-        sendViaResend({
-          from:    "orders@contacts.ucfilters.com",
-          to:      contact.email,
-          subject: receipt.subject,
-          text:    receipt.text,
-          html:    receipt.html,
-          meta:    { template: "order_receipt", orderId: fallbackOrder.id },
-        }).then(ok => {
-          if (!ok) {
-            logger.warn(`[resend] order confirmation not delivered to ${contact.email}; trying legacy email provider`);
-            sendEmail({ to: contact.email, ...receipt, template: "order_receipt", orderId: fallbackOrder.id });
-          }
-        });
-      }
-    }).catch(() => {});
+    sendOrderConfirmationEmail(orderUserId, {
+      orderId:         fallbackOrder.id,
+      lineItems:       fallbackOrder.lineItems,
+      total:           fallbackOrder.total,
+      currency:        fallbackOrder.currency,
+      paymentMethod:   fallbackOrder.paymentMethod,
+      shippingAddress: fallbackOrder.shippingAddress as Record<string, string> | undefined,
+      discountAmount:  fallbackOrder.discountAmount,
+      promoCode:       fallbackOrder.promoCode,
+    });
     res.json(fallbackOrder);
   }
 });
