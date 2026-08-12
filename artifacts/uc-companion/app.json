@@ -35,6 +35,11 @@
     },
     "android": {
       "package": "com.ultraclean.companion",
+      "config": {
+        "googleMaps": {
+          "apiKey": "$GOOGLE_MAPS_ANDROID_KEY"
+        }
+      },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
@@ -90,12 +95,7 @@
           "androidCollapsedTitle": "Ultra-Clear"
         }
       ],
-      [
-        "react-native-maps",
-        {
-          "googleMapsApiKey": "$GOOGLE_MAPS_ANDROID_KEY"
-        }
-      ]
+
     ],
     "experiments": {
       "typedRoutes": true,
