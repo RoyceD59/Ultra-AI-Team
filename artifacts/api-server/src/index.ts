@@ -119,6 +119,70 @@ async function applyStartupMigrations(): Promise<void> {
     $$;
   `);
   logger.info("Startup migration: uc_orders payment_reference unique index ensured");
+
+  // Create team_users table for individual ProjectHub accounts.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_users (
+      id           text PRIMARY KEY,
+      email        text NOT NULL UNIQUE,
+      name         text NOT NULL,
+      password_hash text NOT NULL,
+      role         text NOT NULL DEFAULT 'member',
+      is_active    boolean NOT NULL DEFAULT true,
+      created_at   timestamptz NOT NULL DEFAULT now(),
+      updated_at   timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  logger.info("Startup migration: team_users table ensured");
+
+  // Create team_invitations table.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_invitations (
+      id            text PRIMARY KEY,
+      email         text NOT NULL,
+      token         text NOT NULL UNIQUE,
+      invited_by_id text,
+      accepted_at   timestamptz,
+      expires_at    timestamptz NOT NULL,
+      created_at    timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  logger.info("Startup migration: team_invitations table ensured");
+
+  // Create password_reset_tokens table.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id         text PRIMARY KEY,
+      user_id    text NOT NULL,
+      token      text NOT NULL UNIQUE,
+      expires_at timestamptz NOT NULL,
+      used_at    timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  logger.info("Startup migration: password_reset_tokens table ensured");
+
+  // Seed first admin from environment variables (runs once; idempotent).
+  const adminEmail = process.env["PROJECTHUB_ADMIN_EMAIL"]?.toLowerCase().trim();
+  const adminPassword = process.env["PROJECTHUB_ADMIN_PASSWORD"];
+  if (adminEmail && adminPassword) {
+    const existing = await pool.query(
+      "SELECT id FROM team_users WHERE email = $1 LIMIT 1",
+      [adminEmail],
+    );
+    if (existing.rows.length === 0) {
+      const bcrypt = await import("bcryptjs");
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      const { randomUUID } = await import("crypto");
+      await pool.query(
+        `INSERT INTO team_users (id, email, name, password_hash, role, is_active)
+         VALUES ($1, $2, $3, $4, 'admin', true)
+         ON CONFLICT (email) DO NOTHING`,
+        [randomUUID(), adminEmail, "Admin", passwordHash],
+      );
+      logger.info({ email: adminEmail }, "Startup: seeded initial admin user");
+    }
+  }
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────

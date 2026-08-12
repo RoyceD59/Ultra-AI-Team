@@ -37,7 +37,9 @@ export interface JwtClaims {
   email:     string;
   firstName?: string;
   lastName?:  string;
+  name?:      string; // ProjectHub display name
   type?:      string; // e.g. "team-session" for ProjectHub team auth
+  role?:      string; // "admin" | "member" for ProjectHub users
   exp?:       number;
 }
 

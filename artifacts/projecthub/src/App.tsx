@@ -4,10 +4,16 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { Route, Switch, Router as WouterRouter, useLocation, Redirect } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { isTeamAuthenticated, clearTeamAuth } from '@/lib/team-auth';
+import { isTeamAuthenticated, isTeamAdmin, clearTeamAuth } from '@/lib/team-auth';
 import { useEffect } from 'react';
 
-// Pages
+// Public pages
+import LoginPage from '@/pages/login';
+import RegisterPage from '@/pages/register';
+import ForgotPasswordPage from '@/pages/forgot-password';
+import ResetPasswordPage from '@/pages/reset-password';
+
+// Protected pages
 import Dashboard from '@/pages/dashboard';
 import Projects from '@/pages/projects';
 import ProjectDetail from '@/pages/project-detail';
@@ -22,20 +28,17 @@ import Notifications from '@/pages/notifications';
 import SystemStatus from '@/pages/system-status';
 import WebhookTester from '@/pages/webhook-tester';
 import OrdersPage from '@/pages/orders';
-import LoginPage from '@/pages/login';
+// Admin pages
+import AdminUsersPage from '@/pages/admin/users';
 
 const queryClient = new QueryClient();
 
 /**
- * Protects all wrapped routes. Unauthenticated users are sent to /login
- * with the current path as `?next=` so they return after signing in.
- * Also listens for the `projecthub:unauthorized` window event (fired when
- * the API returns 401) so expired sessions are caught mid-session.
+ * Redirects unauthenticated users to /login and handles mid-session 401 events.
  */
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
 
-  // Listen for 401 events emitted by the custom fetch layer
   useEffect(() => {
     function onUnauthorized() {
       clearTeamAuth();
@@ -54,11 +57,24 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Requires admin role in addition to authentication.
+ */
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  if (!isTeamAdmin()) {
+    return <Redirect to="/" />;
+  }
+  return <>{children}</>;
+}
+
 function Router() {
   return (
     <Switch>
-      {/* Public route — outside the auth guard and layout */}
+      {/* Public routes — outside auth guard and layout */}
       <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={RegisterPage} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
 
       {/* All other routes require authentication */}
       <Route>
@@ -79,6 +95,10 @@ function Router() {
               <Route path="/system" component={SystemStatus} />
               <Route path="/webhook" component={WebhookTester} />
               <Route path="/orders" component={OrdersPage} />
+              {/* Admin-only */}
+              <Route path="/admin/users">
+                <AdminGuard><AdminUsersPage /></AdminGuard>
+              </Route>
               <Route component={NotFound} />
             </Switch>
           </AppLayout>

@@ -1,3 +1,4 @@
+- [ProjectHub auth rewrite](projecthub-auth-rewrite.md) — individual accounts replacing shared passcode; JWT type stays "team-session"; `getAuthHeaders` must stay exported; admin seeded from env vars.
 - [Orval date fields vs Drizzle string-mode dates](orval-drizzle-date-mismatch.md) — Zod coerces `format: date` to JS Date; string-mode Drizzle date columns need manual YYYY-MM-DD conversion at the DB boundary.
 - [Orval schema naming collision with operationId](orval-schema-naming-collision.md) — rename any openapi.yaml schema whose name matches an operationId-derived response/body type before codegen.
 - [Ultra Clear Brand Guidelines](uc-brand-guidelines.md) — official colours, typography, logo rules, and digital layout rules for all UCFilters / Ultra Clear designs.
