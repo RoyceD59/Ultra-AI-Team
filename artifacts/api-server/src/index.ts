@@ -134,6 +134,11 @@ async function applyStartupMigrations(): Promise<void> {
     );
   `);
   logger.info("Startup migration: team_users table ensured");
+  // Add permissions column if upgrading from a build before page-permissions
+  await pool.query(`
+    ALTER TABLE team_users ADD COLUMN IF NOT EXISTS permissions jsonb;
+  `);
+  logger.info("Startup migration: team_users.permissions column ensured");
 
   // Create team_invitations table.
   await pool.query(`

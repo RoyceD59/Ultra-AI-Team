@@ -4,7 +4,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { Route, Switch, Router as WouterRouter, useLocation, Redirect } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { isTeamAuthenticated, isTeamAdmin, clearTeamAuth } from '@/lib/team-auth';
+import { isTeamAuthenticated, isTeamAdmin, clearTeamAuth, canView } from '@/lib/team-auth';
+import type { PageSlug } from '@/lib/team-auth';
 import { useEffect } from 'react';
 
 // Public pages
@@ -33,9 +34,7 @@ import AdminUsersPage from '@/pages/admin/users';
 
 const queryClient = new QueryClient();
 
-/**
- * Redirects unauthenticated users to /login and handles mid-session 401 events.
- */
+/** Redirects unauthenticated users to /login; fires on mid-session 401 events. */
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
 
@@ -57,12 +56,26 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/**
- * Requires admin role in addition to authentication.
- */
+/** Requires admin role in addition to authentication. */
 function AdminGuard({ children }: { children: React.ReactNode }) {
-  if (!isTeamAdmin()) {
-    return <Redirect to="/" />;
+  if (!isTeamAdmin()) return <Redirect to="/" />;
+  return <>{children}</>;
+}
+
+/**
+ * Guards a page by slug — admins always pass; members need at least "view" permission.
+ * Falls back to dashboard when access is denied so members see something useful.
+ */
+function PageGuard({ page, children }: { page: PageSlug; children: React.ReactNode }) {
+  if (!canView(page)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+        <p className="text-lg font-semibold">Access restricted</p>
+        <p className="text-sm text-muted-foreground max-w-xs">
+          You don't have permission to view this page. Ask an admin to grant you access.
+        </p>
+      </div>
+    );
   }
   return <>{children}</>;
 }
@@ -70,7 +83,7 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <Switch>
-      {/* Public routes — outside auth guard and layout */}
+      {/* Public routes */}
       <Route path="/login" component={LoginPage} />
       <Route path="/register" component={RegisterPage} />
       <Route path="/forgot-password" component={ForgotPasswordPage} />
@@ -81,20 +94,45 @@ function Router() {
         <AuthGuard>
           <AppLayout>
             <Switch>
-              <Route path="/" component={Dashboard} />
-              <Route path="/projects" component={Projects} />
-              <Route path="/projects/:id" component={ProjectDetail} />
-              <Route path="/tasks" component={Tasks} />
-              <Route path="/team" component={Team} />
-              <Route path="/ai-monitor" component={AiMonitor} />
-              <Route path="/impact" component={ImpactPage} />
-              <Route path="/alison-feedback" component={AlisonFeedbackPage} />
-              {/* Team Horizon */}
-              <Route path="/contacts" component={Contacts} />
-              <Route path="/notifications" component={Notifications} />
-              <Route path="/system" component={SystemStatus} />
-              <Route path="/webhook" component={WebhookTester} />
-              <Route path="/orders" component={OrdersPage} />
+              <Route path="/">
+                <PageGuard page="dashboard"><Dashboard /></PageGuard>
+              </Route>
+              <Route path="/projects">
+                <PageGuard page="projects"><Projects /></PageGuard>
+              </Route>
+              <Route path="/projects/:id">
+                <PageGuard page="projects"><ProjectDetail /></PageGuard>
+              </Route>
+              <Route path="/tasks">
+                <PageGuard page="tasks"><Tasks /></PageGuard>
+              </Route>
+              <Route path="/team">
+                <PageGuard page="team"><Team /></PageGuard>
+              </Route>
+              <Route path="/ai-monitor">
+                <PageGuard page="ai-monitor"><AiMonitor /></PageGuard>
+              </Route>
+              <Route path="/impact">
+                <PageGuard page="impact"><ImpactPage /></PageGuard>
+              </Route>
+              <Route path="/alison-feedback">
+                <PageGuard page="alison-feedback"><AlisonFeedbackPage /></PageGuard>
+              </Route>
+              <Route path="/contacts">
+                <PageGuard page="contacts"><Contacts /></PageGuard>
+              </Route>
+              <Route path="/notifications">
+                <PageGuard page="notifications"><Notifications /></PageGuard>
+              </Route>
+              <Route path="/system">
+                <PageGuard page="system"><SystemStatus /></PageGuard>
+              </Route>
+              <Route path="/webhook">
+                <PageGuard page="webhook"><WebhookTester /></PageGuard>
+              </Route>
+              <Route path="/orders">
+                <PageGuard page="orders"><OrdersPage /></PageGuard>
+              </Route>
               {/* Admin-only */}
               <Route path="/admin/users">
                 <AdminGuard><AdminUsersPage /></AdminGuard>

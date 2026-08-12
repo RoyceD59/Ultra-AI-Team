@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Users, UserPlus, Shield, ShieldOff, RotateCcw,
-  Copy, Check, Loader2, UserX, UserCheck, Mail,
+  Copy, Check, Loader2, UserX, UserCheck, Mail, Settings2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,8 +18,128 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import {
   listUsers, inviteUser, updateUserRole, updateUser, adminResetPassword,
-  isTeamAdmin, type TeamUserRecord,
+  isTeamAdmin, PAGES,
+  type TeamUserRecord, type PagePermission,
 } from "@/lib/team-auth";
+
+// ─── Permissions Dialog ────────────────────────────────────────────────────────
+
+const LEVEL_LABELS: Record<PagePermission, string> = {
+  none: "No access",
+  view: "View",
+  edit: "Edit",
+};
+
+function PermissionsDialog({
+  user,
+  open,
+  onClose,
+}: { user: TeamUserRecord | null; open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const [perms, setPerms] = useState<Record<string, PagePermission>>({});
+
+  // Reset local state when dialog opens for a new user
+  function initialPerms(u: TeamUserRecord) {
+    const base: Record<string, PagePermission> = {};
+    for (const p of PAGES) base[p.slug] = "none";
+    return { ...base, ...(u.permissions ?? {}) } as Record<string, PagePermission>;
+  }
+
+  function handleOpen(u: TeamUserRecord) {
+    setPerms(initialPerms(u));
+  }
+
+  const mutation = useMutation({
+    mutationFn: () => updateUser(user!.id, { permissions: perms }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["team-users"] });
+      toast({ title: "Permissions saved" });
+      onClose();
+    },
+    onError: (err: Error) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
+  });
+
+  function setAll(level: PagePermission) {
+    const next: Record<string, PagePermission> = {};
+    for (const p of PAGES) next[p.slug] = level;
+    setPerms(next);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (v && user) handleOpen(user);
+        if (!v) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Settings2 className="w-4 h-4 text-primary" />
+            Page permissions — {user?.name}
+          </DialogTitle>
+          <DialogDescription>
+            Choose which pages <strong>{user?.email}</strong> can access.
+            Admins always have full access regardless of these settings.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Quick-set row */}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="mr-1">Set all:</span>
+          {(["none", "view", "edit"] as PagePermission[]).map((lvl) => (
+            <Button key={lvl} size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => setAll(lvl)}>
+              {LEVEL_LABELS[lvl]}
+            </Button>
+          ))}
+        </div>
+
+        {/* Per-page permission matrix */}
+        <div className="border rounded-lg overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-40">Page</TableHead>
+                <TableHead className="text-center">No access</TableHead>
+                <TableHead className="text-center">View</TableHead>
+                <TableHead className="text-center">Edit</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {PAGES.map((page) => (
+                <TableRow key={page.slug}>
+                  <TableCell className="font-medium text-sm">{page.label}</TableCell>
+                  {(["none", "view", "edit"] as PagePermission[]).map((lvl) => (
+                    <TableCell key={lvl} className="text-center">
+                      <input
+                        type="radio"
+                        name={`perm-${page.slug}`}
+                        value={lvl}
+                        checked={(perms[page.slug] ?? "none") === lvl}
+                        onChange={() => setPerms((p) => ({ ...p, [page.slug]: lvl }))}
+                        className="accent-primary cursor-pointer w-4 h-4"
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Saving…</> : "Save permissions"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // ─── Invite Dialog ─────────────────────────────────────────────────────────────
 
@@ -65,6 +185,7 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
           </DialogTitle>
           <DialogDescription>
             An invite link will be generated (valid 7 days). We'll also try to email it.
+            After they join, set their page permissions from the Users table.
           </DialogDescription>
         </DialogHeader>
 
@@ -79,9 +200,8 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
                 {copied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Share this link with the invitee. It expires in 7 days.
-            </p>
+            <p className="text-xs text-muted-foreground">Share this link with the invitee. It expires in 7 days.</p>
+            <DialogFooter><Button onClick={handleClose}>Done</Button></DialogFooter>
           </div>
         ) : (
           <div className="space-y-4">
@@ -104,12 +224,6 @@ function InviteDialog({ open, onClose }: { open: boolean; onClose: () => void })
               </Button>
             </DialogFooter>
           </div>
-        )}
-
-        {inviteUrl && (
-          <DialogFooter>
-            <Button onClick={handleClose}>Done</Button>
-          </DialogFooter>
         )}
       </DialogContent>
     </Dialog>
@@ -140,11 +254,7 @@ function ResetPasswordDialog({
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function handleClose() {
-    setResult(null);
-    setCopied(false);
-    onClose();
-  }
+  function handleClose() { setResult(null); setCopied(false); onClose(); }
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
@@ -152,7 +262,7 @@ function ResetPasswordDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RotateCcw className="w-4 h-4 text-primary" />
-            Reset password for {user?.name}
+            Reset password — {user?.name}
           </DialogTitle>
           <DialogDescription>
             A reset link (valid 24 hours) will be generated and emailed to {user?.email}.
@@ -184,6 +294,20 @@ function ResetPasswordDialog({
   );
 }
 
+// ─── Permission summary badge ──────────────────────────────────────────────────
+
+function PermissionSummary({ user }: { user: TeamUserRecord }) {
+  if (user.role === "admin") return <span className="text-xs text-muted-foreground">All pages (admin)</span>;
+  const perms = user.permissions ?? {};
+  const editCount = Object.values(perms).filter((v) => v === "edit").length;
+  const viewCount = Object.values(perms).filter((v) => v === "view").length;
+  if (editCount === 0 && viewCount === 0) return <span className="text-xs text-destructive">No access</span>;
+  const parts: string[] = [];
+  if (editCount > 0) parts.push(`${editCount} edit`);
+  if (viewCount > 0) parts.push(`${viewCount} view`);
+  return <span className="text-xs text-muted-foreground">{parts.join(", ")}</span>;
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdminUsersPage() {
@@ -191,6 +315,7 @@ export default function AdminUsersPage() {
   const qc = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState<TeamUserRecord | null>(null);
+  const [permTarget, setPermTarget] = useState<TeamUserRecord | null>(null);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["team-users"],
@@ -225,7 +350,7 @@ export default function AdminUsersPage() {
             <Users className="w-6 h-6" /> User Management
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Invite team members, manage roles, and reset passwords.
+            Invite team members, manage roles, set page permissions, and reset passwords.
           </p>
         </div>
         <Button onClick={() => setInviteOpen(true)} className="gap-2">
@@ -245,6 +370,7 @@ export default function AdminUsersPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Page access</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -266,12 +392,24 @@ export default function AdminUsersPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>
+                    <PermissionSummary user={user} />
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={user.isActive ? "outline" : "destructive"}>
                       {user.isActive ? "Active" : "Deactivated"}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
+                      {/* Set permissions (members only) */}
+                      {user.role === "member" && (
+                        <Button
+                          size="sm" variant="ghost" title="Set page permissions"
+                          onClick={() => setPermTarget(user)}
+                        >
+                          <Settings2 className="w-4 h-4" />
+                        </Button>
+                      )}
                       {/* Toggle role */}
                       <Button
                         size="sm" variant="ghost"
@@ -282,10 +420,7 @@ export default function AdminUsersPage() {
                         {user.role === "admin" ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
                       </Button>
                       {/* Reset password */}
-                      <Button
-                        size="sm" variant="ghost" title="Reset password"
-                        onClick={() => setResetTarget(user)}
-                      >
+                      <Button size="sm" variant="ghost" title="Reset password" onClick={() => setResetTarget(user)}>
                         <RotateCcw className="w-4 h-4" />
                       </Button>
                       {/* Deactivate / reactivate */}
@@ -303,7 +438,7 @@ export default function AdminUsersPage() {
               ))}
               {users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                     No team members yet. Invite someone to get started.
                   </TableCell>
                 </TableRow>
@@ -315,6 +450,7 @@ export default function AdminUsersPage() {
 
       <InviteDialog open={inviteOpen} onClose={() => setInviteOpen(false)} />
       <ResetPasswordDialog user={resetTarget} open={!!resetTarget} onClose={() => setResetTarget(null)} />
+      <PermissionsDialog user={permTarget} open={!!permTarget} onClose={() => setPermTarget(null)} />
     </div>
   );
 }

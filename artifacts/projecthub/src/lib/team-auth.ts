@@ -1,16 +1,37 @@
 /**
  * ProjectHub team authentication helpers.
  *
- * Stores the signed JWT in localStorage and exposes helpers for:
- *  - email/password login
- *  - invite-based registration
- *  - password change / forgot-password / reset-password
- *  - admin operations (invite, list users, role changes)
- *  - token lifecycle (get, clear, expiry check)
+ * Stores the signed JWT in localStorage (projecthub:token) and the full user
+ * object including page-level permissions in (projecthub:user).
+ *
+ * Admins bypass all page permissions — they can always view and edit everything.
+ * Members have a per-page permission: "none" | "view" | "edit".
  */
 
 const TOKEN_KEY = "projecthub:token";
+const USER_KEY  = "projecthub:user";
 const API = "/api";
+
+// ─── Page permission types ────────────────────────────────────────────────────
+
+export type PagePermission = "none" | "view" | "edit";
+
+export const PAGES = [
+  { slug: "dashboard",        label: "Dashboard" },
+  { slug: "projects",         label: "Projects" },
+  { slug: "tasks",            label: "Tasks" },
+  { slug: "team",             label: "Team" },
+  { slug: "ai-monitor",       label: "AI Monitor" },
+  { slug: "impact",           label: "UC Impact" },
+  { slug: "alison-feedback",  label: "Alison Feedback" },
+  { slug: "contacts",         label: "Contacts" },
+  { slug: "notifications",    label: "Notifications" },
+  { slug: "system",           label: "System Status" },
+  { slug: "webhook",          label: "Webhook Tester" },
+  { slug: "orders",           label: "Orders" },
+] as const;
+
+export type PageSlug = typeof PAGES[number]["slug"];
 
 // ─── Token storage ────────────────────────────────────────────────────────────
 
@@ -30,13 +51,18 @@ export function getAuthHeaders(): Record<string, string> | null {
   return token ? { Authorization: `Bearer ${token}` } : null;
 }
 
-// ─── User info (decoded from JWT payload — no extra round-trip) ────────────────
+// ─── User info ────────────────────────────────────────────────────────────────
 
 export interface TeamUser {
   id: string;
   email: string;
   name: string;
   role: "admin" | "member";
+  permissions: Record<string, PagePermission>;
+}
+
+function setStoredUser(user: TeamUser): void {
+  try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch { /* no-op */ }
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -57,15 +83,25 @@ function tokenExp(token: string): number | null {
 }
 
 export function getTeamUser(): TeamUser | null {
+  // Prefer the stored user object (includes permissions)
+  try {
+    const stored = localStorage.getItem(USER_KEY);
+    if (stored) {
+      const u = JSON.parse(stored) as TeamUser;
+      if (u.id && u.email) return u;
+    }
+  } catch { /* fall through to JWT decode */ }
+  // Fallback: decode JWT (no permissions available)
   const token = getTeamToken();
   if (!token) return null;
   const p = decodeJwtPayload(token);
-  if (!p || !p["id"] || !p["email"]) return null;
+  if (!p?.["id"] || !p?.["email"]) return null;
   return {
     id: String(p["id"]),
     email: String(p["email"]),
     name: typeof p["name"] === "string" ? p["name"] : String(p["email"]),
     role: p["role"] === "admin" ? "admin" : "member",
+    permissions: {},
   };
 }
 
@@ -73,9 +109,7 @@ export function isTeamAdmin(): boolean {
   return getTeamUser()?.role === "admin";
 }
 
-/**
- * True when there is a stored token AND it has not expired (60-second grace).
- */
+/** True when there is a stored token AND it has not expired (60-second grace). */
 export function isTeamAuthenticated(): boolean {
   const token = getTeamToken();
   if (!token) return false;
@@ -84,14 +118,34 @@ export function isTeamAuthenticated(): boolean {
   return exp > Math.floor(Date.now() / 1000) + 60;
 }
 
+// ─── Page permission helpers ──────────────────────────────────────────────────
+
+/** Returns true if the current user may view (or edit) the given page. */
+export function canView(page: PageSlug | string): boolean {
+  const user = getTeamUser();
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  const level = (user.permissions[page] ?? "none") as PagePermission;
+  return level === "view" || level === "edit";
+}
+
+/** Returns true if the current user may edit content on the given page. */
+export function canEdit(page: PageSlug | string): boolean {
+  const user = getTeamUser();
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  return (user.permissions[page] ?? "none") === "edit";
+}
+
 // ─── Auth state helpers ───────────────────────────────────────────────────────
 
 export function clearTeamAuth(): void {
   clearTeamToken();
+  try { localStorage.removeItem(USER_KEY); } catch { /* no-op */ }
 }
 
 export function handleUnauthorizedResponse(): void {
-  clearTeamToken();
+  clearTeamAuth();
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("projecthub:unauthorized"));
   }
@@ -127,6 +181,7 @@ export async function loginWithEmail(email: string, password: string): Promise<T
     body: JSON.stringify({ email, password }),
   });
   setTeamToken(data.token);
+  setStoredUser(data.user);
   return data.user;
 }
 
@@ -137,6 +192,7 @@ export async function register(inviteToken: string, name: string, password: stri
     body: JSON.stringify({ token: inviteToken, name, password }),
   });
   setTeamToken(data.token);
+  setStoredUser(data.user);
   return data.user;
 }
 
@@ -173,6 +229,7 @@ export interface TeamUserRecord {
   name: string;
   role: "admin" | "member";
   isActive: boolean;
+  permissions: Record<string, PagePermission> | null;
   createdAt: string;
 }
 
@@ -200,7 +257,10 @@ export async function updateUserRole(userId: string, role: "admin" | "member"): 
   });
 }
 
-export async function updateUser(userId: string, updates: { name?: string; isActive?: boolean }): Promise<TeamUserRecord> {
+export async function updateUser(
+  userId: string,
+  updates: { name?: string; isActive?: boolean; permissions?: Record<string, PagePermission> },
+): Promise<TeamUserRecord> {
   return apiFetch<TeamUserRecord>(`/auth/users/${userId}`, {
     method: "PATCH",
     body: JSON.stringify(updates),

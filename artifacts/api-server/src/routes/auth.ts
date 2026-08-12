@@ -44,6 +44,7 @@ type UserPublic = {
   name: string;
   role: "admin" | "member";
   isActive: boolean;
+  permissions: Record<string, string> | null;
   createdAt: Date;
 };
 
@@ -60,8 +61,8 @@ function issueTeamToken(user: { id: string; email: string; name: string; role: s
   return issueToken({ id: user.id, email: user.email, name: user.name, type: "team-session", role: user.role, exp });
 }
 
-function userPublic(u: { id: string; email: string; name: string; role: string; isActive: boolean; createdAt: Date }): UserPublic {
-  return { id: u.id, email: u.email, name: u.name, role: u.role as "admin" | "member", isActive: u.isActive, createdAt: u.createdAt };
+function userPublic(u: { id: string; email: string; name: string; role: string; isActive: boolean; permissions?: Record<string, string> | null; createdAt: Date }): UserPublic {
+  return { id: u.id, email: u.email, name: u.name, role: u.role as "admin" | "member", isActive: u.isActive, permissions: u.permissions ?? null, createdAt: u.createdAt };
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -225,7 +226,8 @@ router.get("/auth/me", requireTeamAuth, async (req, res): Promise<void> => {
   const { id } = (req as AuthRequest).teamUser!;
   const [user] = await db.select({
     id: teamUsersTable.id, email: teamUsersTable.email, name: teamUsersTable.name,
-    role: teamUsersTable.role, isActive: teamUsersTable.isActive, createdAt: teamUsersTable.createdAt,
+    role: teamUsersTable.role, isActive: teamUsersTable.isActive,
+    permissions: teamUsersTable.permissions, createdAt: teamUsersTable.createdAt,
   }).from(teamUsersTable).where(eq(teamUsersTable.id, id)).limit(1);
   if (!user) { res.status(404).json({ error: "User not found." }); return; }
   res.json(user);
@@ -258,7 +260,8 @@ router.post("/auth/change-password", requireTeamAuth, async (req, res): Promise<
 router.get("/auth/users", requireTeamAdmin, async (_req, res): Promise<void> => {
   const users = await db.select({
     id: teamUsersTable.id, email: teamUsersTable.email, name: teamUsersTable.name,
-    role: teamUsersTable.role, isActive: teamUsersTable.isActive, createdAt: teamUsersTable.createdAt,
+    role: teamUsersTable.role, isActive: teamUsersTable.isActive,
+    permissions: teamUsersTable.permissions, createdAt: teamUsersTable.createdAt,
   }).from(teamUsersTable).orderBy(teamUsersTable.createdAt);
   res.json(users);
 });
@@ -308,10 +311,11 @@ router.patch("/auth/users/:id/role", requireTeamAdmin, async (req, res): Promise
 /** PATCH /auth/users/:id  — update name / isActive */
 router.patch("/auth/users/:id", requireTeamAdmin, async (req, res): Promise<void> => {
   const { id } = req.params;
-  const { name, isActive } = req.body ?? {};
+  const { name, isActive, permissions } = req.body ?? {};
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (name !== undefined) updates["name"] = String(name).trim();
   if (isActive !== undefined) updates["isActive"] = Boolean(isActive);
+  if (permissions !== undefined) updates["permissions"] = permissions as Record<string, string>;
   const [user] = await db.update(teamUsersTable).set(updates).where(eq(teamUsersTable.id, id)).returning();
   if (!user) { res.status(404).json({ error: "User not found." }); return; }
   res.json(userPublic(user));

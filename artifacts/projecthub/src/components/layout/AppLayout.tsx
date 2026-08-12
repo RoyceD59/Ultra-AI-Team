@@ -7,8 +7,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  clearTeamAuth, changePassword, isTeamAdmin, getTeamUser,
+  clearTeamAuth, changePassword, isTeamAdmin, getTeamUser, canView,
 } from "@/lib/team-auth";
+import type { PageSlug } from "@/lib/team-auth";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,20 +25,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 
-const navigation = [
-  { name: "Dashboard",        href: "/",                icon: LayoutDashboard },
-  { name: "Projects",         href: "/projects",        icon: FolderKanban },
-  { name: "Tasks",            href: "/tasks",           icon: CheckSquare },
-  { name: "Team",             href: "/team",            icon: Users },
-  { name: "AI Monitor",       href: "/ai-monitor",      icon: Bot },
-  { name: "UC Impact",        href: "/impact",          icon: Leaf },
-  { name: "Alison Feedback",  href: "/alison-feedback", icon: MessageSquareOff },
-  // Team Horizon
-  { name: "Contacts",         href: "/contacts",        icon: Contact2 },
-  { name: "Notifications",    href: "/notifications",   icon: BellRing },
-  { name: "System Status",    href: "/system",          icon: Activity },
-  { name: "Webhook Tester",   href: "/webhook",         icon: Webhook },
-  { name: "Orders",           href: "/orders",          icon: ShoppingBag },
+const ALL_NAVIGATION = [
+  { name: "Dashboard",        href: "/",                slug: "dashboard"       as PageSlug, icon: LayoutDashboard },
+  { name: "Projects",         href: "/projects",        slug: "projects"        as PageSlug, icon: FolderKanban },
+  { name: "Tasks",            href: "/tasks",           slug: "tasks"           as PageSlug, icon: CheckSquare },
+  { name: "Team",             href: "/team",            slug: "team"            as PageSlug, icon: Users },
+  { name: "AI Monitor",       href: "/ai-monitor",      slug: "ai-monitor"      as PageSlug, icon: Bot },
+  { name: "UC Impact",        href: "/impact",          slug: "impact"          as PageSlug, icon: Leaf },
+  { name: "Alison Feedback",  href: "/alison-feedback", slug: "alison-feedback" as PageSlug, icon: MessageSquareOff },
+  { name: "Contacts",         href: "/contacts",        slug: "contacts"        as PageSlug, icon: Contact2 },
+  { name: "Notifications",    href: "/notifications",   slug: "notifications"   as PageSlug, icon: BellRing },
+  { name: "System Status",    href: "/system",          slug: "system"          as PageSlug, icon: Activity },
+  { name: "Webhook Tester",   href: "/webhook",         slug: "webhook"         as PageSlug, icon: Webhook },
+  { name: "Orders",           href: "/orders",          slug: "orders"          as PageSlug, icon: ShoppingBag },
 ];
 
 // ─── Change Password Dialog ────────────────────────────────────────────────────
@@ -115,6 +115,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const admin = isTeamAdmin();
   const user = getTeamUser();
 
+  // Filter nav to pages the current user can access
+  const navigation = ALL_NAVIGATION.filter((item) => canView(item.slug));
+
   function handleSignOut() {
     clearTeamAuth();
     toast({ title: "Signed out", description: "See you next time." });
@@ -188,9 +191,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <div className="flex-1 min-w-0 text-left">
                   <p className="text-xs font-medium truncate">{user?.name ?? user?.email ?? "Team"}</p>
                   <p className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
-                    {user?.role === "admin" ? (
-                      <><Shield className="w-2.5 h-2.5" />Admin</>
-                    ) : "Member"}
+                    {user?.role === "admin" ? <><Shield className="w-2.5 h-2.5" />Admin</> : "Member"}
                   </p>
                 </div>
                 <ChevronDown className="w-3 h-3 text-muted-foreground group-hover:text-foreground transition-colors" />
