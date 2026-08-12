@@ -150,8 +150,70 @@ function parseSuggestions(raw: string): { reply: string; suggestions: string[] }
   return { reply, suggestions };
 }
 
+// ─── Auth helper ─────────────────────────────────────────────────────────────
+
+/**
+ * Extract and verify the Bearer JWT from the Authorization header.
+ * Returns the numeric user id on success, or null on failure.
+ */
+function authenticatedUserId(authHeader: string | undefined): number | null {
+  const claims = verifyToken(authHeader);
+  if (!claims) return null;
+  const numericId = Number(claims.id);
+  if (!Number.isFinite(numericId) || numericId <= 0) return null;
+  return numericId;
+}
+
+// ─── Per-user sliding-window rate limiter ─────────────────────────────────────
+// Keeps a list of recent request timestamps per user and prunes old ones on
+// each call — no external dependency, no timer needed.
+
+const RATE_WINDOW_MS  = 60_000; // 1 minute
+const RATE_MAX_REQS   = 20;     // requests per window
+
+const rateLimitMap = new Map<number, number[]>(); // userId → [timestamps]
+
+/**
+ * Returns true when the user has exceeded the allowed rate.
+ * Side-effect: records this request timestamp if allowed.
+ */
+function isRateLimited(userId: number): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_WINDOW_MS;
+
+  let timestamps = rateLimitMap.get(userId) ?? [];
+  // Prune timestamps outside the window
+  timestamps = timestamps.filter(t => t > cutoff);
+
+  if (timestamps.length >= RATE_MAX_REQS) {
+    rateLimitMap.set(userId, timestamps);
+    return true;
+  }
+
+  timestamps.push(now);
+  rateLimitMap.set(userId, timestamps);
+  return false;
+}
+
 // ─── POST /api/uc/ai/water-chat ───────────────────────────────────────────────
 router.post("/uc/ai/water-chat", async (req: Request, res: Response): Promise<void> => {
+  // ── Auth check ──────────────────────────────────────────────────────────────
+  const userId = authenticatedUserId(req.headers["authorization"]);
+  if (userId === null) {
+    res.status(401).json({
+      error: "Authentication required. Please log in to use the water quality assistant.",
+    });
+    return;
+  }
+
+  // ── Rate limit ──────────────────────────────────────────────────────────────
+  if (isRateLimited(userId)) {
+    res.status(429).json({
+      error: "Too many requests. Please wait a moment before sending another message.",
+    });
+    return;
+  }
+
   const { messages, filterContext, isRetry } = req.body as {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     filterContext?: {
