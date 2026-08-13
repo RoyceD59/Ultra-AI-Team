@@ -124,7 +124,32 @@ export default function CheckoutScreen() {
             clearInterval(pollRef.current!);
             setMpesaWaiting(false);
             setProcessing(false);
-            Alert.alert('Payment failed', status.resultDesc ?? 'M-Pesa payment was not completed.');
+            // Distinguish transient network errors from definitive declines so the
+            // customer gets the right advice:
+            //   retriable=true  → network/server timeout — offer "Try again / COD"
+            //   retriable=false → wrong PIN, user cancelled, insufficient funds —
+            //                     show a dismissal with a hint (no point retrying the
+            //                     same push; the customer should open Safaricom first)
+            if (status.retriable === false) {
+              Alert.alert(
+                'Payment Not Completed',
+                (status.resultDesc ?? 'M-Pesa payment was not completed.') +
+                  '\n\nIf you entered the wrong PIN, open the Safaricom app to verify your M-Pesa PIN before trying again.',
+              );
+            } else {
+              Alert.alert(
+                'M-Pesa Failed',
+                status.resultDesc ?? 'M-Pesa payment was not completed. You can try again or switch to Cash on Delivery.',
+                [
+                  { text: 'Try again', onPress: () => setShowMpesaModal(true) },
+                  {
+                    text: 'Pay with COD instead',
+                    onPress: () => setPaymentMethod('cod'),
+                    style: 'cancel',
+                  },
+                ],
+              );
+            }
           }
         } catch { /* keep polling */ }
       }, 3000);

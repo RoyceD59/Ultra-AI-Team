@@ -222,19 +222,37 @@ router.get(
       // Safaricom returns an error response (HTTP 4xx, no ResultCode) while the
       // STK push is still being processed by the customer. Only a completed
       // transaction includes a ResultCode in the body.
+      //
       // ResultCode "0"    → paid successfully
-      // ResultCode "1032" → customer cancelled (or timed out on their handset)
-      // Any other code    → declined / error
+      // ResultCode "1"    → insufficient funds — permanent (customer must top up)
+      // ResultCode "1032" → customer cancelled / dismissed the prompt — deliberate action
+      // ResultCode "2001" → wrong PIN entered — permanent (hint: use Safaricom app)
+      // ResultCode "1037" → DS Timeout (network couldn't reach the handset) — transient, retryable
+      // Any other code    → treat as transient/retryable unless we know better
       // No ResultCode     → still in progress (pending)
+      //
+      // IMPORTANT: Only mark retriable=false for codes that represent a definitive
+      // user action or hard decline.  Transient network codes should stay retriable=true
+      // so the client offers "Try again" rather than a silent dead end.
       const resultCode = qData["ResultCode"];
       if (!resultCode) {
         // Transaction still in progress — keep polling
         res.json({ status: "pending", resultDesc: qData["errorMessage"] ?? "Processing" });
         return;
       }
+      if (resultCode === "0") {
+        res.json({ status: "success", resultDesc: qData["ResultDesc"] });
+        return;
+      }
+      // Definitive non-retriable failures: user cancelled, wrong PIN, or insufficient funds.
+      // These are deliberate outcomes — showing "Try again" would be confusing or pointless.
+      const NON_RETRIABLE_CODES = new Set(["1", "1032", "2001"]);
       res.json({
-        status: resultCode === "0" ? "success" : "failed",
+        status: "failed",
         resultDesc: qData["ResultDesc"],
+        // retriable=true → transient error (network timeout, unknown code) — show "Try again / COD"
+        // retriable=false → definitive decline (wrong PIN, user cancelled) — show dismissal + hint
+        retriable: !NON_RETRIABLE_CODES.has(resultCode),
       });
     } catch {
       res.json({ status: "pending" });

@@ -189,6 +189,12 @@ export interface MpesaResponse {
 export interface MpesaStatusResult {
   status: 'pending' | 'success' | 'failed';
   resultDesc?: string;
+  /**
+   * Only present when status === 'failed'.
+   * true  → transient error (network timeout, unknown code) — offer "Try again / COD"
+   * false → definitive decline (wrong PIN, user cancelled, insufficient funds) — show dismissal hint
+   */
+  retriable?: boolean;
 }
 
 export interface StripeSessionResponse {
